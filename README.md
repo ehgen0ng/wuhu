@@ -1,10 +1,6 @@
 # wuhu
 一个在[GreenLuma](https://cs.rin.ru/forum/viewtopic.php?f=10&t=103709)基础上所编写的一键解锁Steam DLC，绕过家庭共享不能同时在线限制脚本
 
-## 下载
-
-[Github](https://github.com/emtry/wuhu/archive/master.zip)
-
 ## start
 
 1. 把解压后的`wuhu`文件夹 放入`Steam 根目录`
@@ -19,7 +15,7 @@ A1：可能会被VAC，本脚本使用 NoHook 合法模式，仅供技术交流
 
 Q2：部分 DLC 没有解锁
 
-A2：`List`文件夹内所有 id 总数不得大于137，最多仅支持解锁 137 个本体 或 DLC，暂不需解锁的可放入`ignore`文件夹暂存
+A2：`List`文件夹内所有 id 总数不得大于137，最多仅支持解锁 137 个本体 或 DLC
 
 Q3：部分 本体 没有解锁
 

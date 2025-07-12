@@ -1,2 +1,16 @@
+# 编译后的可执行文件
+wuhu.exe
+
+# Go工作空间文件
+go.work
+
+# 系统文件
 .DS_Store
+
+# IDE文件
+.vscode/
+.idea/
+.claude/
+
+CLAUDE.md
 

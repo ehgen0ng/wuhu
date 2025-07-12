@@ -11,14 +11,22 @@ if exist "%~dp0..\config\config.vdf" (
 for %%i in ("%~dp0List\*.TXT") do (
     for /f "usebackq delims=" %%j in ("%%i") do (
         echo.
-        echo 正在处理 AppID: %%j
+        echo 🎮 正在处理 AppID: %%j
         
         md "%~dp0utils\ManifestHub\%%j" 2>nul
         
-        echo 正在获取游戏信息...
+        echo 🔍 正在获取游戏信息...
         curl -s "https://steamui.com/get_appinfo.php?appid=%%j" > "%~dp0utils\ManifestHub\temp_%%j.txt"
         
-        echo 正在提取 depot 信息...
+        if not exist "%~dp0utils\ManifestHub\temp_%%j.txt" (
+            echo ❌ 获取游戏信息失败
+            pause
+            exit /b
+        ) else (
+            echo ✅ 获取游戏信息成功
+        )
+        
+        echo 📋 正在提取 depot 信息...
         powershell -Command ^
         "Select-String -Pattern '^\s*""(\d{3,7})""' -Path '%~dp0utils\ManifestHub\temp_%%j.txt' |"^
         "  ForEach-Object { $_.Matches[0].Groups[1].Value } |"^
@@ -27,12 +35,13 @@ for %%i in ("%~dp0List\*.TXT") do (
         del "%~dp0utils\ManifestHub\temp_%%j.txt"
         
         set "api_url=https://api.github.com/repos/emtry/ManifestHub/branches/%%j"
-        echo 正在查询 GitHub 分支信息...
+        echo 🔍 正在查询 GitHub 分支信息...
         curl -s "!api_url!" > "%~dp0utils\ManifestHub\temp_branch_%%j.json"
         powershell -Command ^
         "$appId = '%%j'; "^
         "$branchFile = '%~dp0utils\ManifestHub\temp_branch_' + $appId + '.json'; "^
         "$localPath = '%~dp0utils\ManifestHub\' + $appId; "^
+        "$ErrorActionPreference = 'Stop';"^
         "try { "^
         "    if ((Test-Path $branchFile) -and ($branchData = Get-Content $branchFile -Raw | ConvertFrom-Json) -and ($branchData.commit)) { "^
         "        $treeUrl = $branchData.commit.commit.tree.url; "^
@@ -51,31 +60,36 @@ for %%i in ("%~dp0List\*.TXT") do (
         "                } "^
         "            } "^
         "            if ($downloadCount -gt 0) { "^
-        "                Write-Host \"AppID $appId 成功下载 $downloadCount 个文件\"; "^
+        "                Write-Host \"✅ AppID $appId 成功下载 $downloadCount 个文件\"; "^
         "            } else { "^
-        "                Write-Host \"AppID $appId 下载失败\"; "^
+        "                Write-Host \"❌ AppID $appId 下载失败\"; exit 1"^
         "            } "^
         "        } else { "^
-        "            Write-Host \"AppID $appId 下载失败\"; "^
+        "            Write-Host \"❌ AppID $appId 下载失败\"; exit 1"^
         "        } "^
         "    } else { "^
-        "        Write-Host \"AppID $appId 下载失败 或 GitHub API 速率限制\"; "^
+        "        Write-Host \"❌ AppID $appId 下载失败 或 GitHub API 速率限制\"; exit 1"^
         "    } "^
         "} catch { "^
-        "    Write-Host \"AppID $appId 下载失败: $_\"; "^
+        "    Write-Host \"❌ AppID $appId 下载失败: $_\"; exit 1"^
         "}"
+        
+        if errorlevel 1 (
+            pause
+            exit /b
+        )
         
         if exist "%~dp0utils\ManifestHub\temp_branch_%%j.json" (
             del "%~dp0utils\ManifestHub\temp_branch_%%j.json"
         )
 	
         if exist "%~dp0utils\ManifestHub\%%j\*.manifest" (
-            echo 正在复制 manifest 文件到 depotcache...
+            echo 📤 正在复制 manifest 文件到 depotcache...
             copy "%~dp0utils\ManifestHub\%%j\*.manifest" "%~dp0..\depotcache"
         )
         
         if exist "%~dp0utils\ManifestHub\%%j\key.vdf" (
-            echo 正在合并密钥信息到 config.vdf...
+            echo 🔑 正在合并密钥信息到 config.vdf...
             powershell -Command ^
             "$keyFile = '%~dp0utils\ManifestHub\%%j\key.vdf'; "^
             "$configFile = '%~dp0..\config\config.vdf'; "^
@@ -97,6 +111,12 @@ for %%i in ("%~dp0List\*.TXT") do (
             "    } "^
             "    Set-Content -Path $configFile -Value $configContent -Encoding UTF8; "^
             "}"
+            
+            if errorlevel 1 (
+                echo ❌ 合并密钥信息失败
+                pause
+                exit /b
+            )
         )
 
         echo.
