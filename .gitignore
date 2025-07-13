@@ -1,5 +1,8 @@
+.env
+
 # 编译后的可执行文件
 wuhu.exe
+ding.exe
 
 # Go工作空间文件
 go.work

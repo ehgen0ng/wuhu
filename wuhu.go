@@ -57,7 +57,7 @@ func showMenu() {
 	fmt.Println("   \\ `\\___x___/\\ \\_____\\ \\_\\ \\_\\ \\_____\\")
 	fmt.Println("    '\\/__//__/  \\/_____/\\/_/\\/_/\\/_____/")
 	fmt.Println("")
-	fmt.Println("            v1.0.2 - Built with Go")
+	fmt.Println("            v1.0.3 - Built with Go")
 	fmt.Println("")
 	fmt.Println("  1. wuhu~")
 	fmt.Println("  2. 新增 AppID")
@@ -302,13 +302,13 @@ func organizeAppIDs() {
 		// 清理文件名，移除非法字符
 		safeFileName := sanitizeFileName(targetName)
 		targetFilePath := filepath.Join(outputDir, safeFileName+".txt")
-		
+
 		// 立即将AppID追加到目标文件（如果不存在则创建）
 		appendToFile(targetFilePath, appID)
-		
+
 		// 从其他文件中删除这个AppID（成功处理后）
 		deleteFromOtherFiles(outputDir, safeFileName+".txt", appID)
-		
+
 		fmt.Printf("\n")
 	}
 }
@@ -321,7 +321,7 @@ func appendToFile(filePath, appID string) {
 		return // 静默处理错误
 	}
 	defer file.Close()
-	
+
 	// 检查AppID是否已存在于文件中
 	if !isAppIDInFile(filePath, appID) {
 		file.WriteString(appID + "\n")
@@ -334,7 +334,7 @@ func isAppIDInFile(filePath, appID string) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
 		if strings.TrimSpace(line) == appID {
