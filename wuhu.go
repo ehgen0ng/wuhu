@@ -57,7 +57,7 @@ func showMenu() {
 	fmt.Println("   \\ `\\___x___/\\ \\_____\\ \\_\\ \\_\\ \\_____\\")
 	fmt.Println("    '\\/__//__/  \\/_____/\\/_/\\/_/\\/_____/")
 	fmt.Println("")
-	fmt.Println("            v1.0.1 - Built with Go")
+	fmt.Println("            v1.0.2 - Built with Go")
 	fmt.Println("")
 	fmt.Println("  1. wuhu~")
 	fmt.Println("  2. 新增 AppID")
@@ -262,38 +262,37 @@ func organizeAppIDs() {
 	// 创建输出目录在List下
 	outputDir := "List"
 
-	// 为每个AppID获取游戏信息并按名称组织
-	gameFiles := make(map[string][]string)   // 游戏名称 -> AppID列表
+	// 为每个AppID获取游戏信息并立即处理
 	parentCache := make(map[string]GameInfo) // 缓存parent信息避免重复请求
 
 	for appID := range allAppIDs {
+		fmt.Printf("正在处理 %s...", appID)
 		gameInfo := getGameInfo(appID)
 		if gameInfo.Name == "" {
-			fmt.Printf("  %s - 获取失败\n", appID)
+			fmt.Printf(" ❌ 获取失败\n")
+			// 失败的ID不删除，保持原有状态
 			continue
 		}
 
-		// 处理DLC逻辑
+		// 显示当前AppID的名称
+		fmt.Printf(" ✅ %s", gameInfo.Name)
+
+		// 处理DLC逻辑 - 决定归类到哪个文件
 		var targetName string
 		if gameInfo.Parent != "" {
-			// 这是DLC，检查parent是否在已有AppID中
-			if allAppIDs[gameInfo.Parent] {
-				// parent在已有AppID中，获取parent信息
-				var parentInfo GameInfo
-				if cached, exists := parentCache[gameInfo.Parent]; exists {
-					parentInfo = cached
-				} else {
-					parentInfo = getGameInfo(gameInfo.Parent)
-					parentCache[gameInfo.Parent] = parentInfo
-				}
-
-				if parentInfo.Name != "" {
-					targetName = parentInfo.Name
-				} else {
-					targetName = gameInfo.Name
-				}
+			// 这是DLC，无论parent是否在已有AppID中，都获取parent信息
+			var parentInfo GameInfo
+			if cached, exists := parentCache[gameInfo.Parent]; exists {
+				parentInfo = cached
 			} else {
-				// parent不在已有AppID中，使用自己的名称
+				parentInfo = getGameInfo(gameInfo.Parent)
+				parentCache[gameInfo.Parent] = parentInfo
+			}
+
+			if parentInfo.Name != "" {
+				targetName = parentInfo.Name
+				fmt.Printf(" → %s", parentInfo.Name)
+			} else {
 				targetName = gameInfo.Name
 			}
 		} else {
@@ -302,51 +301,69 @@ func organizeAppIDs() {
 
 		// 清理文件名，移除非法字符
 		safeFileName := sanitizeFileName(targetName)
-		gameFiles[safeFileName] = append(gameFiles[safeFileName], appID)
+		targetFilePath := filepath.Join(outputDir, safeFileName+".txt")
+		
+		// 立即将AppID追加到目标文件（如果不存在则创建）
+		appendToFile(targetFilePath, appID)
+		
+		// 从其他文件中删除这个AppID（成功处理后）
+		deleteFromOtherFiles(outputDir, safeFileName+".txt", appID)
+		
+		fmt.Printf("\n")
 	}
+}
 
-	// 创建文件并删除源AppID
-	for fileName, appIDs := range gameFiles {
-		filePath := filepath.Join(outputDir, fileName+".txt")
-		file, err := os.Create(filePath)
-		if err != nil {
-			fmt.Printf("❌ 创建文件 %s 失败: %v\n", fileName, err)
-			continue
+// 追加AppID到文件
+func appendToFile(filePath, appID string) {
+	// 检查文件是否存在，如果不存在则创建
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return // 静默处理错误
+	}
+	defer file.Close()
+	
+	// 检查AppID是否已存在于文件中
+	if !isAppIDInFile(filePath, appID) {
+		file.WriteString(appID + "\n")
+	}
+}
+
+// 检查AppID是否已存在于文件中
+func isAppIDInFile(filePath, appID string) bool {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return false
+	}
+	
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == appID {
+			return true
+		}
+	}
+	return false
+}
+
+// 从其他文件中删除指定的AppID
+func deleteFromOtherFiles(outputDir, targetFile, appID string) {
+	err := filepath.WalkDir(outputDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
 		}
 
-		for _, appID := range appIDs {
-			file.WriteString(appID + "\n")
-		}
-		file.Close()
-
-		fmt.Printf("✅ %s.txt\n", fileName)
-		for _, appID := range appIDs {
-			fmt.Printf("  %s\n", appID)
-		}
-
-		// 删除源AppID（除非已经在目标文件中）
-		targetFileName := fileName + ".txt"
-		err = filepath.WalkDir("List", func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-
-			// 跳过目标文件本身和example.txt
-			if d.Name() == targetFileName || d.Name() == "example.txt" {
-				return nil
-			}
-
-			if strings.HasSuffix(strings.ToLower(d.Name()), ".txt") {
-				for _, appID := range appIDs {
-					deleteFromFile(path, appID)
-				}
-			}
+		// 跳过目标文件本身和example.txt
+		if d.Name() == targetFile || d.Name() == "example.txt" {
 			return nil
-		})
-
-		if err != nil {
-			// fmt.Printf("⚠️ 清理源文件时出错: %v\n", err)
 		}
+
+		if strings.HasSuffix(strings.ToLower(d.Name()), ".txt") {
+			deleteFromFile(path, appID)
+		}
+		return nil
+	})
+
+	if err != nil {
+		// 静默处理错误，不影响主流程
 	}
 }
 
@@ -371,51 +388,79 @@ func sanitizeFileName(name string) string {
 }
 
 func getGameInfo(appID string) GameInfo {
-	url := fmt.Sprintf("https://steamui.com/api/get_appinfo.php?appid=%s", appID)
+	maxRetries := 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 如果不是第一次尝试，等待5秒再重试
+		if attempt > 1 {
+			time.Sleep(5 * time.Second)
+		}
 
-	client := &http.Client{
-		Timeout: 15 * time.Second,
+		url := fmt.Sprintf("https://steamui.com/api/get_appinfo.php?appid=%s", appID)
+
+		client := &http.Client{
+			Timeout: 15 * time.Second,
+		}
+
+		resp, err := client.Get(url)
+		if err != nil {
+			if attempt == maxRetries {
+				return GameInfo{}
+			}
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			if attempt == maxRetries {
+				return GameInfo{}
+			}
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			if attempt == maxRetries {
+				return GameInfo{}
+			}
+			continue
+		}
+
+		content := string(body)
+
+		var name, parent string
+
+		// 提取中文名称
+		if schinese := extractVDFValue(content, "schinese"); schinese != "" {
+			name = schinese
+		} else if gameName := extractVDFValue(content, "name"); gameName != "" {
+			name = gameName
+		}
+
+		// 提取parent信息
+		parent = extractVDFValue(content, "parent")
+
+		// 如果成功获取到名称，返回结果
+		if name != "" {
+			return GameInfo{
+				Name:   name,
+				Parent: parent,
+			}
+		}
+
+		// 如果没有名称但这是最后一次尝试，返回空结果
+		if attempt == maxRetries {
+			return GameInfo{}
+		}
 	}
 
-	resp, err := client.Get(url)
-	if err != nil {
-		return GameInfo{}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return GameInfo{}
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return GameInfo{}
-	}
-
-	content := string(body)
-
-	var name, parent string
-
-	// 提取中文名称
-	if schinese := extractVDFValue(content, "schinese"); schinese != "" {
-		name = schinese
-	} else if gameName := extractVDFValue(content, "name"); gameName != "" {
-		name = gameName
-	}
-
-	// 提取parent信息
-	parent = extractVDFValue(content, "parent")
-
-	return GameInfo{
-		Name:   name,
-		Parent: parent,
-	}
+	return GameInfo{}
 }
 
 func extractVDFValue(content, key string) string {
 	lines := strings.Split(content, "\n")
 	inCommonSection := false
 	inNameLocalizedSection := false
+	braceLevel := 0
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -423,8 +468,14 @@ func extractVDFValue(content, key string) string {
 		// 检查是否进入common段
 		if strings.Contains(line, "\"common\"") {
 			inCommonSection = true
+			braceLevel = 0
 			continue
 		}
+
+		// 计算大括号嵌套层级
+		openBraces := strings.Count(line, "{")
+		closeBraces := strings.Count(line, "}")
+		braceLevel += openBraces - closeBraces
 
 		// 检查是否进入name_localized段
 		if inCommonSection && strings.Contains(line, "\"name_localized\"") {
@@ -462,13 +513,14 @@ func extractVDFValue(content, key string) string {
 			}
 		}
 
-		// 检查是否离开某个段落（遇到右大括号）
-		if strings.Contains(line, "}") {
+		// 根据嵌套层级判断是否离开段落
+		if braceLevel < 0 {
 			if inNameLocalizedSection {
 				inNameLocalizedSection = false
 			} else if inCommonSection {
 				inCommonSection = false
 			}
+			braceLevel = 0
 		}
 	}
 	return ""
