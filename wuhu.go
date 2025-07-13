@@ -577,24 +577,24 @@ func isAppIDExists(targetID string) bool {
 }
 
 func deleteFromFile(filePath, targetID string) bool {
-	file, err := os.Open(filePath)
+	// 读取文件内容
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return false
 	}
-	defer file.Close()
 
-	var lines []string
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
 	found := false
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
 		if line == targetID {
 			found = true
 			continue // 跳过要删除的行
 		}
 		if line != "" {
-			lines = append(lines, line)
+			newLines = append(newLines, line)
 		}
 	}
 
@@ -603,23 +603,15 @@ func deleteFromFile(filePath, targetID string) bool {
 	}
 
 	// 如果删除后文件为空，删除整个文件
-	if len(lines) == 0 {
+	if len(newLines) == 0 {
 		os.Remove(filePath)
 		return true
 	}
 
-	// 重写文件
-	file, err = os.Create(filePath)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-
-	for _, line := range lines {
-		file.WriteString(line + "\n")
-	}
-
-	return true
+	// 重写文件内容
+	newContent := strings.Join(newLines, "\n") + "\n"
+	err = os.WriteFile(filePath, []byte(newContent), 0644)
+	return err == nil
 }
 
 func showSteamDirectory() {
