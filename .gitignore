@@ -1,8 +1,7 @@
 .env
 
-# 编译后的可执行文件
-wuhu.exe
-ding.exe
+# 构建产物目录
+dist/
 
 # Go工作空间文件
 go.work

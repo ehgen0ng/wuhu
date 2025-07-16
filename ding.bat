@@ -34,7 +34,7 @@ for %%i in ("%~dp0List\*.TXT") do (
         
         del "%~dp0utils\ManifestHub\temp_%%j.txt"
         
-        set "api_url=https://api.github.com/repos/emtry/ManifestHub/branches/%%j"
+        set "api_url=https://api.github.com/repos/ehgen0ng/ManifestHub/branches/%%j"
         echo 🔍 正在查询 GitHub 分支信息...
         curl -s "!api_url!" > "%~dp0utils\ManifestHub\temp_branch_%%j.json"
         powershell -Command ^
@@ -51,7 +51,7 @@ for %%i in ("%~dp0List\*.TXT") do (
         "            foreach ($item in $treeData.tree) { "^
         "                $fileName = $item.path; "^
         "                if ($fileName -match '\.(manifest|vdf)$' -or $fileName -match '^(Key|key|config)\.vdf$') { "^
-        "                    $downloadUrl = 'https://raw.githubusercontent.com/emtry/ManifestHub/' + $appId + '/' + $fileName; "^
+        "                    $downloadUrl = 'https://raw.githubusercontent.com/ehgen0ng/ManifestHub/' + $appId + '/' + $fileName; "^
         "                    $outputPath = Join-Path $localPath $fileName; "^
         "                    try { "^
         "                        Invoke-WebRequest -Uri $downloadUrl -OutFile $outputPath -Headers @{'User-Agent'='PowerShell'}; "^

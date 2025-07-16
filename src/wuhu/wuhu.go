@@ -14,7 +14,15 @@ import (
 	"time"
 )
 
+var Version string
+
 func main() {
+	// 设置工作目录为程序所在目录，确保相对路径正确
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		os.Chdir(exeDir)
+	}
+
 	for {
 		showMenu()
 		choice := getUserChoice()
@@ -57,7 +65,7 @@ func showMenu() {
 	fmt.Println("   \\ `\\___x___/\\ \\_____\\ \\_\\ \\_\\ \\_____\\")
 	fmt.Println("    '\\/__//__/  \\/_____/\\/_/\\/_/\\/_____/")
 	fmt.Println("")
-	fmt.Println("            v1.0.3 - Built with Go")
+	fmt.Printf("            %s - Built with Go\n", Version)
 	fmt.Println("")
 	fmt.Println("  1. wuhu~")
 	fmt.Println("  2. 新增 AppID")

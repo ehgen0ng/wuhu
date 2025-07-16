@@ -203,7 +203,7 @@ func (md *ManifestDownloader) saveLocalVersion(appID string, repo *RepoInfo) err
 }
 
 func (md *ManifestDownloader) getUserInput() (string, error) {
-	fmt.Print("")
+	fmt.Print("Enter the AppID: ")
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
 	if err != nil {
