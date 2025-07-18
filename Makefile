@@ -1,10 +1,15 @@
 # 版本配置
-VERSION = 1.0.4
+VERSION = 1.0.5
 PACKAGE_NAME = wuhu_go_$(VERSION)
 DIST_DIR = dist/$(PACKAGE_NAME)
 
 BUILD_FLAGS = -ldflags="-w -s -X 'main.Version=v$(VERSION)'"
 RUN_FLAGS = -ldflags="-X 'main.Version=v$(VERSION)'"
+
+# yee 项目特殊配置
+YEE_SDK_PATH = src/yee/steamworks_sdk_162/sdk
+YEE_OBJ_FILE = src/yee/steam_init.o
+YEE_CPP_FILE = src/yee/steam_init.cpp
 
 run-wuhu:
 	cd src/wuhu && go run $(RUN_FLAGS) wuhu.go
@@ -12,7 +17,7 @@ run-wuhu:
 run-ding:
 	cd src/ding && go run ding.go
 
-run-yee:
+run-yee: $(YEE_OBJ_FILE)
 	cd src/yee && go run yee.go
 
 build-wuhu:
@@ -23,9 +28,19 @@ build-ding:
 	mkdir -p $(DIST_DIR)
 	cd src/ding && GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o ../../$(DIST_DIR)/ding.exe ding.go
 
-build-yee:
+build-yee: $(YEE_OBJ_FILE)
 	mkdir -p $(DIST_DIR)
-	cd src/yee && GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o ../../$(DIST_DIR)/yee.exe yee.go
+	@echo Cross-compiling yee.exe for Windows...
+	cd src/yee && CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ go build $(BUILD_FLAGS) -o ../../$(DIST_DIR)/yee.exe yee.go
+	@echo Copying steam_api64.dll to dist...
+	@cp "$(YEE_SDK_PATH)/redistributable_bin/win64/steam_api64.dll" "$(DIST_DIR)/steam_api64.dll"
+
+# 编译 yee 项目的 C++ 对象文件
+$(YEE_OBJ_FILE): $(YEE_CPP_FILE) src/yee/steam_init.h
+	@echo Cross-compiling C++ source for Windows...
+	x86_64-w64-mingw32-g++ -c $(YEE_CPP_FILE) -I$(YEE_SDK_PATH)/public -o $(YEE_OBJ_FILE)
+
+
 
 copy-assets:
 	cp -r utils $(DIST_DIR)/
@@ -40,9 +55,6 @@ build: build-wuhu build-ding build-yee copy-assets
 
 clean:
 	rm -rf dist/
+	rm -f $(YEE_OBJ_FILE)
 
-package: build
-	cd dist && tar -czf $(PACKAGE_NAME).tar.gz $(PACKAGE_NAME)/
-	@echo "Package completed: dist/$(PACKAGE_NAME).tar.gz"
-
-.PHONY: run-wuhu run-ding run-yee build-wuhu build-ding build-yee copy-assets build clean package 
+.PHONY: run-wuhu run-ding run-yee build-wuhu build-ding build-yee copy-assets build clean package install-yee-deps 

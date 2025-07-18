@@ -1,7 +1,8 @@
 .env
 
-# 构建产物目录
+# 构建产物
 dist/
+*.o
 
 # Go工作空间文件
 go.work
@@ -14,5 +15,5 @@ go.work
 .idea/
 .claude/
 
-CLAUDE.md
-
+# Steamworks SDK
+steamworks_sdk*/

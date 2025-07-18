@@ -17,6 +17,15 @@ import (
 var Version string
 
 func main() {
+	// 全局错误恢复，防止程序闪退
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("❌ 程序遇到意外错误: %v\n", r)
+			fmt.Print("\n按回车键退出...")
+			bufio.NewReader(os.Stdin).ReadLine()
+		}
+	}()
+
 	// 设置工作目录为程序所在目录，确保相对路径正确
 	if exePath, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exePath)
@@ -29,13 +38,13 @@ func main() {
 
 		switch choice {
 		case "1":
-			showSteamDirectory()
+			safeShowSteamDirectory()
 			waitForExit()
 		case "2":
 			addAppID()
 			waitForEnter()
 		case "3":
-			organizeAppIDs()
+			safeOrganizeAppIDs()
 			waitForEnter()
 		case "4":
 			showAppIDs()
@@ -44,7 +53,7 @@ func main() {
 			deleteAppID()
 			waitForEnter()
 		case "6":
-			clearSteamCache()
+			safeClearSteamCache()
 			waitForEnter()
 		default:
 			fmt.Println("❌ 输入有误，请重新选择哦~")
@@ -236,6 +245,16 @@ type SteamAPIResponse struct {
 	AppInfo AppInfo `json:"appinfo"`
 }
 
+func safeOrganizeAppIDs() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("❌ 整理AppID时遇到错误: %v\n", r)
+			fmt.Println("⚠️ 可能是网络连接问题，请检查网络后重试")
+		}
+	}()
+	organizeAppIDs()
+}
+
 func organizeAppIDs() {
 	fmt.Println("📋 开始整理 AppID...")
 
@@ -396,6 +415,12 @@ func sanitizeFileName(name string) string {
 }
 
 func getGameInfo(appID string) GameInfo {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("⚠️ 获取AppID %s信息时发生错误: %v\n", appID, r)
+		}
+	}()
+
 	maxRetries := 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// 如果不是第一次尝试，等待5秒再重试
@@ -412,6 +437,7 @@ func getGameInfo(appID string) GameInfo {
 		resp, err := client.Get(url)
 		if err != nil {
 			if attempt == maxRetries {
+				fmt.Printf("⚠️ 网络连接失败，无法获取AppID %s的信息\n", appID)
 				return GameInfo{}
 			}
 			continue
@@ -622,6 +648,16 @@ func deleteFromFile(filePath, targetID string) bool {
 	return err == nil
 }
 
+func safeShowSteamDirectory() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("❌ 查找Steam目录时遇到错误: %v\n", r)
+			fmt.Println("⚠️ 可能是系统权限问题或注册表访问失败")
+		}
+	}()
+	showSteamDirectory()
+}
+
 func showSteamDirectory() {
 	// 尝试从注册表获取 Steam 路径
 	steamPath := getSteamPathFromRegistry()
@@ -678,6 +714,16 @@ func queryRegistry(hive, key, value string) string {
 	}
 
 	return ""
+}
+
+func safeClearSteamCache() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("❌ 清空Steam缓存时遇到错误: %v\n", r)
+			fmt.Println("⚠️ 可能是程序文件不存在或权限不足")
+		}
+	}()
+	clearSteamCache()
 }
 
 func clearSteamCache() {
