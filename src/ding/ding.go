@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
 	"embed"
@@ -235,67 +236,126 @@ func (md *ManifestDownloader) createAppIDDir(appID string) error {
 func (md *ManifestDownloader) getBranchInfo(ctx context.Context, repo, appID string) (*BranchInfo, error) {
 	branchURL := fmt.Sprintf("%s/repos/%s/branches/%s", md.githubAPI, repo, appID)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", branchURL, nil)
-	if err != nil {
-		return nil, err
+	attempt := 1
+	for {
+		req, err := http.NewRequestWithContext(ctx, "GET", branchURL, nil)
+		if err != nil {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+
+		md.setAuthHeader(req)
+
+		// 添加User-Agent以避免GitHub阻止请求
+		req.Header.Set("User-Agent", "ManifestDownloader/1.0")
+
+		resp, err := md.client.Do(req)
+		if err != nil {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == 404 {
+			// 404说明分支不存在，直接返回错误，不重试
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		if resp.StatusCode != 200 {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+
+		var branchInfo BranchInfo
+		if err := json.NewDecoder(resp.Body).Decode(&branchInfo); err != nil {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+
+		return &branchInfo, nil
 	}
-
-	md.setAuthHeader(req)
-
-	// 添加User-Agent以避免GitHub阻止请求
-	req.Header.Set("User-Agent", "ManifestDownloader/1.0")
-
-	resp, err := md.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var branchInfo BranchInfo
-	if err := json.NewDecoder(resp.Body).Decode(&branchInfo); err != nil {
-		return nil, err
-	}
-
-	return &branchInfo, nil
 }
 
 func (md *ManifestDownloader) getFileListFromTree(ctx context.Context, treeURL string) ([]TreeItem, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", treeURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	md.setAuthHeader(req)
-
-	resp, err := md.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("tree API请求失败: %d", resp.StatusCode)
-	}
-
-	var treeResp TreeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&treeResp); err != nil {
-		return nil, err
-	}
-
-	var files []TreeItem
-	for _, item := range treeResp.Tree {
-		if item.Type == "blob" && strings.ToLower(item.Path) != "readme.md" {
-			files = append(files, item)
+	attempt := 1
+	for {
+		req, err := http.NewRequestWithContext(ctx, "GET", treeURL, nil)
+		if err != nil {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
 		}
-	}
 
-	fmt.Printf("✅ 通过 GitHub tree API 获取到 %d 个文件\n", len(files))
-	return files, nil
+		md.setAuthHeader(req)
+
+		resp, err := md.client.Do(req)
+		if err != nil {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+
+		var treeResp TreeResponse
+		if err := json.NewDecoder(resp.Body).Decode(&treeResp); err != nil {
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			attempt++
+			continue
+		}
+
+		var files []TreeItem
+		for _, item := range treeResp.Tree {
+			if item.Type == "blob" && strings.ToLower(item.Path) != "readme.md" {
+				files = append(files, item)
+			}
+		}
+
+		fmt.Printf("✅ 通过 GitHub tree API 获取到 %d 个文件\n", len(files))
+		return files, nil
+	}
 }
 
 func (md *ManifestDownloader) findLatestRepo(ctx context.Context, appID string) (*RepoInfo, error) {
@@ -352,11 +412,19 @@ func (md *ManifestDownloader) downloadFileWithCDN(ctx context.Context, repo *Rep
 		cdnList = append(md.globalCDNList, md.cnCDNList...)
 	}
 
-	for retry := 0; retry < 3; retry++ {
+	round := 1
+	totalAttempts := 0
+	for {
 		for i, cdnTemplate := range cdnList {
+			totalAttempts++
 			url := strings.ReplaceAll(cdnTemplate, "{repo}", repo.Name)
 			url = strings.ReplaceAll(url, "{sha}", repo.SHA)
 			url = strings.ReplaceAll(url, "{path}", filePath)
+
+			// 第一次尝试每个CDN时不显示，重试时显示
+			if totalAttempts > len(cdnList) {
+				fmt.Printf("\r🔄 重试第%d轮 CDN%d/%d: %s", round-1, i+1, len(cdnList), filepath.Base(filePath))
+			}
 
 			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 			if err != nil {
@@ -365,7 +433,6 @@ func (md *ManifestDownloader) downloadFileWithCDN(ctx context.Context, repo *Rep
 
 			resp, err := md.client.Do(req)
 			if err != nil {
-				fmt.Printf("⚠️  CDN %d/%d 失败 (重试 %d/3): %s\n", i+1, len(cdnList), retry+1, url)
 				continue
 			}
 
@@ -373,24 +440,27 @@ func (md *ManifestDownloader) downloadFileWithCDN(ctx context.Context, repo *Rep
 				data, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				if err == nil {
+					// 成功时清除重试信息（如果有的话）
+					if totalAttempts > len(cdnList) {
+						fmt.Printf("\r                                        \r")
+					}
 					return data, nil
 				}
 			}
 			resp.Body.Close()
-			fmt.Printf("⚠️  CDN %d/%d 响应异常 %d (重试 %d/3): %s\n", i+1, len(cdnList), resp.StatusCode, retry+1, url)
 		}
 
-		if retry < 2 {
-			fmt.Printf("🔄 第 %d 轮重试失败，等待1秒后继续...\n", retry+1)
-			select {
-			case <-time.After(time.Second):
-			case <-ctx.Done():
-				return nil, ctx.Err()
+		// 一轮CDN都失败了，等待1秒后继续下一轮
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			if totalAttempts > len(cdnList) {
+				fmt.Printf("\r❌ 下载被取消: %s\n", filepath.Base(filePath))
 			}
+			return nil, ctx.Err()
 		}
+		round++
 	}
-
-	return nil, fmt.Errorf("所有 %d 个CDN重试3轮后均失败: %s", len(cdnList), filePath)
 }
 
 func (md *ManifestDownloader) downloadAllFiles(ctx context.Context, appID string, repo *RepoInfo) error {
@@ -475,6 +545,40 @@ func (md *ManifestDownloader) downloadAllFiles(ctx context.Context, appID string
 }
 
 func (md *ManifestDownloader) Run() error {
+	// 首先检查本地ZIP文件
+	zipFiles, err := md.checkLocalZipFiles()
+	if err == nil && len(zipFiles) > 0 {
+		// 处理找到的ZIP文件
+		for _, zipPath := range zipFiles {
+			// 从文件名提取AppID
+			appID, err := md.extractAppIDFromZipName(zipPath)
+			if err != nil {
+				continue
+			}
+			
+			// 解压ZIP文件到ManifestHub目录
+			if err := md.extractZipToManifestDir(zipPath, appID); err != nil {
+				continue
+			}
+			
+			// 检查解压后的目录是否包含密钥文件
+			appDir := filepath.Join(md.baseDir, appID)
+			if !md.hasKeyFiles(appDir) {
+				continue
+			}
+			
+			// 直接处理密钥文件
+			fmt.Printf("🎯 开始处理ZIP文件: %s (AppID: %s)\n", filepath.Base(zipPath), appID)
+			if err := md.processDepotKeys(appID); err != nil {
+				continue
+			}
+			
+			fmt.Printf("✅ 成功处理ZIP文件: %s\n", filepath.Base(zipPath))
+			return nil // 成功处理一个ZIP文件后返回
+		}
+	}
+	
+	// 原有流程：用户输入AppID
 	appID, err := md.getUserInput()
 	if err != nil {
 		return fmt.Errorf("输入错误: %w", err)
@@ -627,6 +731,35 @@ func (md *ManifestDownloader) parseKeyVDF(content []byte) ([]DepotInfo, error) {
 	return depots, nil
 }
 
+func (md *ManifestDownloader) parseAppIDLua(content []byte) ([]DepotInfo, error) {
+	luaContent := string(content)
+	lines := strings.Split(luaContent, "\n")
+
+	var depots []DepotInfo
+	re := regexp.MustCompile(`addappid\((\d+),\s*1,\s*"([a-fA-F0-9]+)"\)`)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "--") || line == "" {
+			continue
+		}
+
+		matches := re.FindStringSubmatch(line)
+		if len(matches) == 3 {
+			depotID := matches[1]
+			decryptionKey := matches[2]
+
+			depot := DepotInfo{
+				DepotID:       depotID,
+				DecryptionKey: decryptionKey,
+			}
+			depots = append(depots, depot)
+		}
+	}
+
+	return depots, nil
+}
+
 func (md *ManifestDownloader) addDepotKeysToConfig(configPath string, depots []DepotInfo) error {
 	// 读取现有配置
 	content, err := os.ReadFile(configPath)
@@ -752,33 +885,59 @@ func (md *ManifestDownloader) addDepotKeysToConfig(configPath string, depots []D
 func (md *ManifestDownloader) processDepotKeys(appID string) error {
 	appDir := filepath.Join(md.baseDir, appID)
 
-	// 查找key.vdf文件
-	keyFiles := []string{"key.vdf", "Key.vdf", "keys.vdf", "Keys.vdf"}
-	var keyFilePath string
+	// 优先查找任意lua文件
+	luaPattern := filepath.Join(appDir, "*.lua")
+	luaFiles, _ := filepath.Glob(luaPattern)
+	var luaFilePath string
+	
+	if len(luaFiles) > 0 {
+		luaFilePath = luaFiles[0] // 使用找到的第一个lua文件
+	}
 
-	for _, keyFile := range keyFiles {
-		path := filepath.Join(appDir, keyFile)
-		if _, err := os.Stat(path); err == nil {
-			keyFilePath = path
-			break
+	var depots []DepotInfo
+
+	if luaFilePath != "" {
+		fmt.Printf("🔑 找到Lua密钥文件: %s\n", luaFilePath)
+
+		// 读取并解析lua文件
+		content, err := os.ReadFile(luaFilePath)
+		if err != nil {
+			return fmt.Errorf("读取Lua密钥文件失败: %w", err)
 		}
-	}
 
-	if keyFilePath == "" {
-		return fmt.Errorf("未找到key.vdf文件")
-	}
+		depots, err = md.parseAppIDLua(content)
+		if err != nil {
+			return fmt.Errorf("解析Lua密钥文件失败: %w", err)
+		}
+	} else {
+		// 如果没有lua文件，查找key.vdf文件
+		keyFiles := []string{"key.vdf", "Key.vdf", "keys.vdf", "Keys.vdf"}
+		var keyFilePath string
 
-	fmt.Printf("🔑 找到密钥文件: %s\n", keyFilePath)
+		for _, keyFile := range keyFiles {
+			path := filepath.Join(appDir, keyFile)
+			if _, err := os.Stat(path); err == nil {
+				keyFilePath = path
+				break
+			}
+		}
 
-	// 读取并解析key.vdf
-	content, err := os.ReadFile(keyFilePath)
-	if err != nil {
-		return fmt.Errorf("读取密钥文件失败: %w", err)
-	}
+		if keyFilePath == "" {
+			return fmt.Errorf("未找到key.vdf或lua文件")
+		}
 
-	depots, err := md.parseKeyVDF(content)
-	if err != nil {
-		return fmt.Errorf("解析密钥文件失败: %w", err)
+		fmt.Printf("🔑 找到VDF密钥文件: %s\n", keyFilePath)
+
+		// 读取并解析key.vdf
+		content, err := os.ReadFile(keyFilePath)
+		if err != nil {
+			return fmt.Errorf("读取密钥文件失败: %w", err)
+		}
+
+		depots, err = md.parseKeyVDF(content)
+		if err != nil {
+			return fmt.Errorf("解析密钥文件失败: %w", err)
+		}
 	}
 
 	if len(depots) == 0 {
@@ -975,4 +1134,139 @@ func (md *ManifestDownloader) backupSteamConfig(configPath string) error {
 
 	fmt.Printf("💾 已备份Steam配置文件到: %s\n", backupPath)
 	return nil
+}
+
+// checkLocalZipFiles 检测当前目录下的ZIP文件
+func (md *ManifestDownloader) checkLocalZipFiles() ([]string, error) {
+	// 获取当前执行文件的目录
+	execPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("获取执行文件路径失败: %w", err)
+	}
+	execDir := filepath.Dir(execPath)
+
+	// 查找所有ZIP文件
+	pattern := filepath.Join(execDir, "*.zip")
+	zipFiles, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("查找ZIP文件失败: %w", err)
+	}
+
+	return zipFiles, nil
+}
+
+// extractAppIDFromZipName 从ZIP文件名提取AppID
+func (md *ManifestDownloader) extractAppIDFromZipName(zipPath string) (string, error) {
+	fileName := filepath.Base(zipPath)
+	// 移除.zip扩展名
+	nameWithoutExt := strings.TrimSuffix(fileName, ".zip")
+
+	// 使用正则表达式提取数字部分
+	re := regexp.MustCompile(`^(\d+)`)
+	matches := re.FindStringSubmatch(nameWithoutExt)
+
+	if len(matches) < 2 {
+		return "", fmt.Errorf("无法从文件名 %s 提取AppID", fileName)
+	}
+
+	appID := matches[1]
+	// 验证AppID是否为有效数字
+	if _, err := strconv.Atoi(appID); err != nil {
+		return "", fmt.Errorf("提取的AppID %s 不是有效数字", appID)
+	}
+
+	return appID, nil
+}
+
+// extractZipToManifestDir 解压ZIP文件到ManifestHub目录
+func (md *ManifestDownloader) extractZipToManifestDir(zipPath, appID string) error {
+	// 创建目标目录
+	targetDir := filepath.Join(md.baseDir, appID)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("创建目标目录失败: %w", err)
+	}
+
+	// 打开ZIP文件
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("打开ZIP文件失败: %w", err)
+	}
+	defer reader.Close()
+
+	extractedCount := 0
+	for _, file := range reader.File {
+		// 构建目标文件路径
+		destPath := filepath.Join(targetDir, file.Name)
+
+		// 确保路径安全（防止zip slip攻击）
+		if !strings.HasPrefix(destPath, filepath.Clean(targetDir)+string(os.PathSeparator)) {
+			continue
+		}
+
+		if file.FileInfo().IsDir() {
+			// 创建目录
+			if err := os.MkdirAll(destPath, file.FileInfo().Mode()); err != nil {
+				continue
+			}
+		} else {
+			// 解压文件
+			if err := md.extractZipFile(file, destPath); err != nil {
+				continue
+			}
+			extractedCount++
+		}
+	}
+
+	if extractedCount == 0 {
+		return fmt.Errorf("未解压任何文件")
+	}
+
+	return nil
+}
+
+// extractZipFile 解压单个文件
+func (md *ManifestDownloader) extractZipFile(file *zip.File, destPath string) error {
+	// 创建目标目录
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return err
+	}
+
+	// 打开ZIP文件中的文件
+	srcFile, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// 创建目标文件
+	dstFile, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	// 复制内容
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
+// hasKeyFiles 检查目录是否包含密钥文件
+func (md *ManifestDownloader) hasKeyFiles(appDir string) bool {
+	// 检查lua文件
+	luaPattern := filepath.Join(appDir, "*.lua")
+	luaFiles, _ := filepath.Glob(luaPattern)
+	if len(luaFiles) > 0 {
+		return true
+	}
+
+	// 检查vdf文件
+	keyFiles := []string{"key.vdf", "Key.vdf", "keys.vdf", "Keys.vdf"}
+	for _, keyFile := range keyFiles {
+		path := filepath.Join(appDir, keyFile)
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+
+	return false
 }
