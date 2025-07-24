@@ -1,5 +1,5 @@
 # 版本配置
-VERSION = 1.1.8
+VERSION = 1.1.9
 PACKAGE_NAME = wuhu_go_$(VERSION)
 DIST_DIR = dist/$(PACKAGE_NAME)
 

@@ -574,6 +574,10 @@ func (md *ManifestDownloader) Run() error {
 			}
 
 			fmt.Printf("✅ 成功处理ZIP文件: %s\n", filepath.Base(zipPath))
+
+			// 删除处理成功的ZIP文件
+			os.Remove(zipPath)
+
 			return nil // 成功处理一个ZIP文件后返回
 		}
 	}
@@ -972,7 +976,95 @@ func (md *ManifestDownloader) processDepotKeys(appID string) error {
 		fmt.Printf("⚠️  复制manifest文件失败: %v\n", err)
 	}
 
+	// 创建appmanifest文件到Steam的steamapps目录
+	if err := md.createAppManifest(appID, steamPath); err != nil {
+		fmt.Printf("⚠️  创建appmanifest文件失败: %v\n", err)
+	}
+
+	// 无论appmanifest文件是否已存在，都确保AppID被添加到go.txt
+	if err := md.addAppIDToGoFile(appID); err != nil {
+	}
+
 	return nil
+}
+
+func (md *ManifestDownloader) createAppManifest(appID, steamPath string) error {
+	steamAppsDir := filepath.Join(steamPath, "steamapps")
+
+	// 创建steamapps目录（如果不存在）
+	if err := os.MkdirAll(steamAppsDir, 0755); err != nil {
+		return fmt.Errorf("创建steamapps目录失败: %w", err)
+	}
+
+	// 生成appmanifest文件名
+	manifestFileName := fmt.Sprintf("appmanifest_%s.acf", appID)
+	manifestPath := filepath.Join(steamAppsDir, manifestFileName)
+
+	// 检查文件是否已存在
+	if _, err := os.Stat(manifestPath); err == nil {
+		fmt.Printf("✅ appmanifest文件已存在: %s\n", manifestPath)
+		return nil
+	}
+
+	// 创建appmanifest内容
+	content := fmt.Sprintf(`"AppState"
+{
+	"appid"		"%s"
+	"Universe"		"1"
+	"StateFlags"		"2"
+}
+`, appID)
+
+	// 写入文件
+	err := os.WriteFile(manifestPath, []byte(content), 0644)
+	if err != nil {
+		return fmt.Errorf("写入appmanifest文件失败: %w", err)
+	}
+
+	fmt.Printf("📄 已创建appmanifest文件: %s\n", manifestPath)
+	return nil
+}
+
+func (md *ManifestDownloader) addAppIDToGoFile(appID string) error {
+	listDir := "List"
+	if err := os.MkdirAll(listDir, 0755); err != nil {
+		return fmt.Errorf("创建List目录失败: %w", err)
+	}
+
+	goFile := filepath.Join(listDir, "go.txt")
+
+	// 检查AppID是否已存在
+	if md.isAppIDInGoFile(goFile, appID) {
+		return nil
+	}
+
+	// 添加到go.txt
+	file, err := os.OpenFile(goFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("打开go.txt文件失败: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(appID + "\n"); err != nil {
+		return fmt.Errorf("写入go.txt文件失败: %w", err)
+	}
+
+	return nil
+}
+
+func (md *ManifestDownloader) isAppIDInGoFile(filePath, appID string) bool {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return false
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == appID {
+			return true
+		}
+	}
+	return false
 }
 
 func (md *ManifestDownloader) createDepotIDFile(appID string, depots []DepotInfo) error {
