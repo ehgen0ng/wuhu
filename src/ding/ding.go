@@ -148,7 +148,7 @@ func NewManifestDownloader() *ManifestDownloader {
 	}
 
 	md.detectRegion()
-	md.loadEnv() // 加载.env文件
+	md.loadEnv()
 	md.showTokenStatus()
 	return md
 }
@@ -555,29 +555,29 @@ func (md *ManifestDownloader) Run() error {
 			if err != nil {
 				continue
 			}
-			
+
 			// 解压ZIP文件到ManifestHub目录
 			if err := md.extractZipToManifestDir(zipPath, appID); err != nil {
 				continue
 			}
-			
+
 			// 检查解压后的目录是否包含密钥文件
 			appDir := filepath.Join(md.baseDir, appID)
 			if !md.hasKeyFiles(appDir) {
 				continue
 			}
-			
+
 			// 直接处理密钥文件
 			fmt.Printf("🎯 开始处理ZIP文件: %s (AppID: %s)\n", filepath.Base(zipPath), appID)
 			if err := md.processDepotKeys(appID); err != nil {
 				continue
 			}
-			
+
 			fmt.Printf("✅ 成功处理ZIP文件: %s\n", filepath.Base(zipPath))
 			return nil // 成功处理一个ZIP文件后返回
 		}
 	}
-	
+
 	// 原有流程：用户输入AppID
 	appID, err := md.getUserInput()
 	if err != nil {
@@ -736,7 +736,8 @@ func (md *ManifestDownloader) parseAppIDLua(content []byte) ([]DepotInfo, error)
 	lines := strings.Split(luaContent, "\n")
 
 	var depots []DepotInfo
-	re := regexp.MustCompile(`addappid\((\d+),\s*1,\s*"([a-fA-F0-9]+)"\)`)
+	// 只匹配带密钥的格式: addappid(id,flag,"hash")
+	re := regexp.MustCompile(`addappid\((\d+)(?:,\s*[01])?,\s*"([a-fA-F0-9]+)"\)`)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -889,46 +890,41 @@ func (md *ManifestDownloader) processDepotKeys(appID string) error {
 	luaPattern := filepath.Join(appDir, "*.lua")
 	luaFiles, _ := filepath.Glob(luaPattern)
 	var luaFilePath string
-	
+
 	if len(luaFiles) > 0 {
 		luaFilePath = luaFiles[0] // 使用找到的第一个lua文件
 	}
 
 	var depots []DepotInfo
 
+	// 优先尝试解析Lua文件
 	if luaFilePath != "" {
 		fmt.Printf("🔑 找到Lua密钥文件: %s\n", luaFilePath)
 
-		// 读取并解析lua文件
 		content, err := os.ReadFile(luaFilePath)
 		if err != nil {
 			return fmt.Errorf("读取Lua密钥文件失败: %w", err)
 		}
 
 		depots, err = md.parseAppIDLua(content)
-		if err != nil {
-			return fmt.Errorf("解析Lua密钥文件失败: %w", err)
+		if err == nil && len(depots) > 0 {
+			// Lua解析成功，直接使用结果
+			fmt.Printf("🔓 从Lua文件解析到 %d 个depot密钥\n", len(depots))
+		} else {
+			fmt.Printf("⚠️  Lua解析失败或无有效密钥，尝试解析VDF文件: %v\n", err)
+			depots = nil // 清空结果，准备尝试VDF
 		}
-	} else {
-		// 如果没有lua文件，查找key.vdf文件
-		keyFiles := []string{"key.vdf", "Key.vdf", "keys.vdf", "Keys.vdf"}
-		var keyFilePath string
+	}
 
-		for _, keyFile := range keyFiles {
-			path := filepath.Join(appDir, keyFile)
-			if _, err := os.Stat(path); err == nil {
-				keyFilePath = path
-				break
-			}
-		}
-
-		if keyFilePath == "" {
-			return fmt.Errorf("未找到key.vdf或lua文件")
+	// 如果Lua解析失败或没有Lua文件，尝试VDF文件
+	if len(depots) == 0 {
+		keyFilePath := filepath.Join(appDir, "key.vdf")
+		if _, err := os.Stat(keyFilePath); err != nil {
+			return fmt.Errorf("未找到key.vdf文件")
 		}
 
 		fmt.Printf("🔑 找到VDF密钥文件: %s\n", keyFilePath)
 
-		// 读取并解析key.vdf
 		content, err := os.ReadFile(keyFilePath)
 		if err != nil {
 			return fmt.Errorf("读取密钥文件失败: %w", err)
@@ -1259,13 +1255,10 @@ func (md *ManifestDownloader) hasKeyFiles(appDir string) bool {
 		return true
 	}
 
-	// 检查vdf文件
-	keyFiles := []string{"key.vdf", "Key.vdf", "keys.vdf", "Keys.vdf"}
-	for _, keyFile := range keyFiles {
-		path := filepath.Join(appDir, keyFile)
-		if _, err := os.Stat(path); err == nil {
-			return true
-		}
+	// 检查key.vdf文件
+	keyFile := filepath.Join(appDir, "key.vdf")
+	if _, err := os.Stat(keyFile); err == nil {
+		return true
 	}
 
 	return false
