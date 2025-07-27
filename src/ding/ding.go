@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"compress/gzip"
 	"context"
 	"embed"
 	"encoding/json"
@@ -33,6 +34,13 @@ type VDFNode struct {
 	Children map[string]*VDFNode
 }
 
+type Config struct {
+	CreateAppManifest bool
+	AddAppIDToGoFile  bool
+	ManifestCookie    string
+	UserAgent         string
+}
+
 type ManifestDownloader struct {
 	client        *http.Client
 	baseDir       string
@@ -42,6 +50,7 @@ type ManifestDownloader struct {
 	cnCDNList     []string
 	globalCDNList []string
 	isCN          bool
+	config        Config
 }
 
 type RepoInfo struct {
@@ -79,6 +88,27 @@ type TreeResponse struct {
 	Tree []TreeItem `json:"tree"`
 }
 
+// ManifestAPI response structures
+type GameSearchResponse struct {
+	Games []GameInfo `json:"games"`
+}
+
+type GameInfo struct {
+	Name         string `json:"name"`
+	LastModified string `json:"last_modified"`
+	FileSize     int64  `json:"file_size"`
+}
+
+type PrepareDownloadResponse struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	DownloadToken  string `json:"download_token"`
+	Filename       string `json:"filename"`
+	FileSize       int64  `json:"file_size"`
+	RemainingToday int    `json:"remaining_today"`
+	ExpiresIn      int    `json:"expires_in"`
+}
+
 func (md *ManifestDownloader) loadEnv() {
 	// 优先尝试读取嵌入的.env文件
 	if content, err := envFile.ReadFile(".env"); err == nil {
@@ -103,6 +133,46 @@ func (md *ManifestDownloader) loadEnv() {
 	md.parseEnvContent(strings.Join(lines, "\n"))
 }
 
+func (md *ManifestDownloader) loadConfig() {
+	configFile := "config.txt"
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		// 默认配置
+		md.config = Config{
+			CreateAppManifest: true,
+			AddAppIDToGoFile:  true,
+			UserAgent:         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+		}
+		return
+	}
+
+	// 解析配置文件
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+
+			switch key {
+			case "createAppManifest":
+				md.config.CreateAppManifest = value == "1"
+			case "addAppIDToGoFile":
+				md.config.AddAppIDToGoFile = value == "1"
+			case "MANIFEST_COOKIE":
+				md.config.ManifestCookie = value
+			case "USER_AGENT":
+				md.config.UserAgent = value
+			}
+		}
+	}
+}
+
 func (md *ManifestDownloader) parseEnvContent(content string) {
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
@@ -115,10 +185,15 @@ func (md *ManifestDownloader) parseEnvContent(content string) {
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			if key == "GITHUB_TOKEN" && md.githubToken == "" {
+			if key == "GITHUB_TOKEN" {
 				md.githubToken = value
 			}
 		}
+	}
+
+	// Use environment variable as fallback if not set in config
+	if md.githubToken == "" {
+		md.githubToken = os.Getenv("GITHUB_TOKEN")
 	}
 }
 
@@ -127,9 +202,8 @@ func NewManifestDownloader() *ManifestDownloader {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		baseDir:     "utils/ManifestHub",
-		githubAPI:   "https://api.github.com",
-		githubToken: os.Getenv("GITHUB_TOKEN"),
+		baseDir:   "utils/ManifestHub",
+		githubAPI: "https://api.github.com",
 		repoList: []string{
 			"ehgen0ng/ManifestHub",
 			"SteamAutoCracks/ManifestHub",
@@ -149,6 +223,7 @@ func NewManifestDownloader() *ManifestDownloader {
 
 	md.detectRegion()
 	md.loadEnv()
+	md.loadConfig()
 	md.showTokenStatus()
 	return md
 }
@@ -250,9 +325,10 @@ func (md *ManifestDownloader) getBranchInfo(ctx context.Context, repo, appID str
 		}
 
 		md.setAuthHeader(req)
+		req.Header.Set("User-Agent", md.config.UserAgent)
 
 		// 添加User-Agent以避免GitHub阻止请求
-		req.Header.Set("User-Agent", "ManifestDownloader/1.0")
+		req.Header.Set("User-Agent", md.config.UserAgent)
 
 		resp, err := md.client.Do(req)
 		if err != nil {
@@ -312,6 +388,7 @@ func (md *ManifestDownloader) getFileListFromTree(ctx context.Context, treeURL s
 		}
 
 		md.setAuthHeader(req)
+		req.Header.Set("User-Agent", md.config.UserAgent)
 
 		resp, err := md.client.Do(req)
 		if err != nil {
@@ -430,6 +507,8 @@ func (md *ManifestDownloader) downloadFileWithCDN(ctx context.Context, repo *Rep
 			if err != nil {
 				continue
 			}
+
+			req.Header.Set("User-Agent", md.config.UserAgent)
 
 			resp, err := md.client.Do(req)
 			if err != nil {
@@ -573,8 +652,6 @@ func (md *ManifestDownloader) Run() error {
 				continue
 			}
 
-			fmt.Printf("✅ 成功处理ZIP文件: %s\n", filepath.Base(zipPath))
-
 			// 删除处理成功的ZIP文件
 			os.Remove(zipPath)
 
@@ -587,6 +664,19 @@ func (md *ManifestDownloader) Run() error {
 	if err != nil {
 		return fmt.Errorf("输入错误: %w", err)
 	}
+
+	// 首先尝试使用Manifest API下载
+	success, err := md.downloadWithManifestAPI(appID)
+	if success {
+		// Manifest API下载成功，直接返回
+		return nil
+	} else if err != nil {
+		// 有配置cookie但下载失败，显示错误信息然后fallback
+		fmt.Printf("❌ Manifest API下载失败: %v\n", err)
+	}
+
+	// 使用原有的GitHub方法下载
+	fmt.Printf("📥 开始为 AppID %s 下载清单文件...\n", appID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -977,12 +1067,16 @@ func (md *ManifestDownloader) processDepotKeys(appID string) error {
 	}
 
 	// 创建appmanifest文件到Steam的steamapps目录
-	if err := md.createAppManifest(appID, steamPath); err != nil {
-		fmt.Printf("⚠️  创建appmanifest文件失败: %v\n", err)
+	if md.config.CreateAppManifest {
+		if err := md.createAppManifest(appID, steamPath); err != nil {
+			fmt.Printf("⚠️  创建appmanifest文件失败: %v\n", err)
+		}
 	}
 
 	// 无论appmanifest文件是否已存在，都确保AppID被添加到go.txt
-	if err := md.addAppIDToGoFile(appID); err != nil {
+	if md.config.AddAppIDToGoFile {
+		if err := md.addAppIDToGoFile(appID); err != nil {
+		}
 	}
 
 	return nil
@@ -1354,4 +1448,247 @@ func (md *ManifestDownloader) hasKeyFiles(appDir string) bool {
 	}
 
 	return false
+}
+
+// 读取HTTP响应并处理gzip解压缩
+func (md *ManifestDownloader) readResponseBody(resp *http.Response) ([]byte, error) {
+	var reader io.Reader = resp.Body
+
+	// 检查是否是 gzip 压缩
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("gzip解压缩失败: %v", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+
+	return io.ReadAll(reader)
+}
+
+// 搜索游戏信息
+func (md *ManifestDownloader) searchGame(appID string) (*GameInfo, error) {
+	baseURL := "https://manifest.morrenus.xyz"
+	searchURL := fmt.Sprintf("%s/api/games?limit=100&offset=0&search=%s&platform=&status=&dlc_status=&genre=&sort_by=date_newest", baseURL, appID)
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("❌ 创建请求失败: %v", err)
+	}
+
+	// 设置请求头
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("User-Agent", md.config.UserAgent)
+	req.Header.Set("Accept-Language", "zh-CN,zh-Hans;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	req.Header.Set("Referer", baseURL+"/")
+
+	if md.config.ManifestCookie != "" {
+		req.Header.Set("Cookie", strings.TrimSpace(md.config.ManifestCookie))
+	}
+
+	resp, err := md.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("❌ 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := md.readResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("❌ 读取响应失败: %v", err)
+	}
+
+	// 检查是否是HTML错误页面
+	bodyStr := string(body)
+	if strings.Contains(bodyStr, "<!DOCTYPE html>") {
+		return nil, fmt.Errorf("❌ 服务器返回HTML错误页面")
+	}
+
+	var searchResp GameSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		fmt.Printf("❌ 服务器响应: %s\n", bodyStr)
+		return nil, fmt.Errorf("❌ JSON解析失败: %v", err)
+	}
+
+	if len(searchResp.Games) == 0 {
+		return nil, fmt.Errorf("❌ 未找到 AppID: %s", appID)
+	}
+
+	game := &searchResp.Games[0]
+	fmt.Printf("🎮 %s\n", game.Name)
+
+	return game, nil
+}
+
+// 准备下载
+func (md *ManifestDownloader) prepareDownload(appID string) (*PrepareDownloadResponse, error) {
+	baseURL := "https://manifest.morrenus.xyz"
+	prepareURL := fmt.Sprintf("%s/download/prepare/%s", baseURL, appID)
+
+	req, err := http.NewRequest("POST", prepareURL, strings.NewReader("{}"))
+	if err != nil {
+		return nil, fmt.Errorf("❌ 创建请求失败: %v", err)
+	}
+
+	// 设置请求头
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("User-Agent", md.config.UserAgent)
+	req.Header.Set("Accept-Language", "zh-CN,zh-Hans;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	req.Header.Set("Origin", baseURL)
+	req.Header.Set("Referer", baseURL+"/")
+	req.Header.Set("Content-Length", "2")
+
+	if md.config.ManifestCookie != "" {
+		req.Header.Set("Cookie", strings.TrimSpace(md.config.ManifestCookie))
+	}
+
+	resp, err := md.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("❌ 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := md.readResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("❌ 读取响应失败: %v", err)
+	}
+
+	// 检查是否是HTML错误页面
+	bodyStr := string(body)
+	if strings.Contains(bodyStr, "<!DOCTYPE html>") {
+		return nil, fmt.Errorf("❌ 服务器返回HTML错误页面")
+	}
+
+	var prepareResp PrepareDownloadResponse
+	if err := json.Unmarshal(body, &prepareResp); err != nil {
+		fmt.Printf("❌ 服务器响应: %s\n", bodyStr)
+		return nil, fmt.Errorf("❌ JSON解析失败: %v", err)
+	}
+
+	if !prepareResp.Success {
+		return nil, fmt.Errorf("%s", prepareResp.Message)
+	}
+
+	if prepareResp.DownloadToken == "" {
+		return nil, fmt.Errorf("❌ 未能获取下载令牌")
+	}
+
+	if prepareResp.Filename == "" {
+		return nil, fmt.Errorf("❌ 未能获取文件名")
+	}
+
+	fmt.Printf("🔑 下载令牌: %s\n", prepareResp.DownloadToken)
+	fmt.Printf("📊 剩余下载次数: %d\n", prepareResp.RemainingToday)
+
+	return &prepareResp, nil
+}
+
+// 下载文件
+func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filename string, expectedSize int64) error {
+	baseURL := "https://manifest.morrenus.xyz"
+	downloadURL := fmt.Sprintf("%s/download/%s?token=%s", baseURL, appID, downloadToken)
+
+	// 创建安全的文件名（移除特殊字符）
+	safeFilename := regexp.MustCompile(`[^a-zA-Z0-9._-]`).ReplaceAllString(filename, "_")
+
+	req, err := http.NewRequest("GET", downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("❌ 创建请求失败: %v", err)
+	}
+
+	// 设置请求头
+	req.Header.Set("User-Agent", md.config.UserAgent)
+	req.Header.Set("Referer", baseURL+"/")
+
+	if md.config.ManifestCookie != "" {
+		req.Header.Set("Cookie", strings.TrimSpace(md.config.ManifestCookie))
+	}
+
+	resp, err := md.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("❌ 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("❌ 下载失败，状态码: %d", resp.StatusCode)
+	}
+
+	// 创建文件
+	file, err := os.Create(safeFilename)
+	if err != nil {
+		return fmt.Errorf("❌ 创建文件失败: %v", err)
+	}
+	defer file.Close()
+
+	// 下载文件
+	downloadedSize, err := io.Copy(file, resp.Body)
+	if err != nil {
+		return fmt.Errorf("❌ 下载文件失败: %v", err)
+	}
+
+	// 验证文件大小
+	if expectedSize > 0 && downloadedSize != expectedSize {
+		fmt.Printf("⚠️  文件大小不匹配！预期: %d bytes, 实际: %d bytes\n", expectedSize, downloadedSize)
+	} else if expectedSize > 0 {
+		fmt.Printf("✅ 文件大小验证通过\n")
+	}
+
+	fmt.Printf("💾 文件: %s\n", safeFilename)
+	fmt.Printf("📏 大小: %d bytes (%.2f MB)\n", downloadedSize, float64(downloadedSize)/1024/1024)
+
+	// 解压到ManifestHub目录
+	if err := md.extractZipToManifestDir(safeFilename, appID); err != nil {
+		return fmt.Errorf("❌ 解压文件失败: %v", err)
+	}
+
+	// 删除原始zip文件
+	if err := os.Remove(safeFilename); err != nil {
+		fmt.Printf("⚠️  删除原始文件失败: %v\n", err)
+	}
+
+	fmt.Printf("✅ 文件已解压到 %s/%s\n", md.baseDir, appID)
+	return nil
+}
+
+// 使用Manifest API下载清单
+func (md *ManifestDownloader) downloadWithManifestAPI(appID string) (bool, error) {
+	// 检查是否配置了Cookie
+	if md.config.ManifestCookie == "" {
+		return false, nil // 没有配置cookie，返回false表示未尝试
+	}
+
+	fmt.Printf("🔍 使用Manifest API下载 AppID: %s\n", appID)
+
+	// 搜索游戏信息
+	_, err := md.searchGame(appID)
+	if err != nil {
+		return false, err
+	}
+
+	// 准备下载
+	prepareResp, err := md.prepareDownload(appID)
+	if err != nil {
+		return false, err
+	}
+
+	// 下载文件
+	err = md.downloadManifestFile(appID, prepareResp.DownloadToken, prepareResp.Filename, prepareResp.FileSize)
+	if err != nil {
+		return false, err
+	}
+
+	// 检查解压后的目录是否包含密钥文件
+	appDir := filepath.Join(md.baseDir, appID)
+	if !md.hasKeyFiles(appDir) {
+		return false, fmt.Errorf("❌ 解压后的目录中未找到密钥文件")
+	}
+
+	if err := md.processDepotKeys(appID); err != nil {
+		return false, fmt.Errorf("❌ 处理密钥文件失败: %v", err)
+	}
+	return true, nil
 }
