@@ -676,8 +676,6 @@ func (md *ManifestDownloader) Run() error {
 	}
 
 	// 使用原有的GitHub方法下载
-	fmt.Printf("📥 开始为 AppID %s 下载清单文件...\n", appID)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -1082,6 +1080,62 @@ func (md *ManifestDownloader) processDepotKeys(appID string) error {
 	return nil
 }
 
+func (md *ManifestDownloader) fetchAppInfoWithRetry(appID string) string {
+	maxRetries := 5
+	retryDelay := 2 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		installdir := md.fetchAppInfo(appID)
+		if installdir != "" {
+			return installdir
+		}
+
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+		}
+	}
+
+	return ""
+}
+
+func (md *ManifestDownloader) fetchAppInfo(appID string) string {
+	url := fmt.Sprintf("https://steamui.com/api/get_appinfo.php?appid=%s", appID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return ""
+	}
+
+	req.Header.Set("User-Agent", md.config.UserAgent)
+
+	resp, err := md.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return ""
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+
+	responseStr := string(body)
+
+	// 直接用正则表达式查找installdir字段
+	re := regexp.MustCompile(`"installdir"\s+"([^"]+)"`)
+	matches := re.FindStringSubmatch(responseStr)
+
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+
+	return ""
+}
+
 func (md *ManifestDownloader) createAppManifest(appID, steamPath string) error {
 	steamAppsDir := filepath.Join(steamPath, "steamapps")
 
@@ -1100,14 +1154,22 @@ func (md *ManifestDownloader) createAppManifest(appID, steamPath string) error {
 		return nil
 	}
 
+	// 获取installdir
+	installdir := md.fetchAppInfoWithRetry(appID)
+	if installdir == "" {
+		// 如果获取installdir失败，跳过文件生成
+		return nil
+	}
+
 	// 创建appmanifest内容
 	content := fmt.Sprintf(`"AppState"
 {
 	"appid"		"%s"
 	"Universe"		"1"
 	"StateFlags"		"2"
+	"installdir"		"%s"
 }
-`, appID)
+`, appID, installdir)
 
 	// 写入文件
 	err := os.WriteFile(manifestPath, []byte(content), 0644)
@@ -1587,7 +1649,7 @@ func (md *ManifestDownloader) prepareDownload(appID string) (*PrepareDownloadRes
 }
 
 // 下载文件
-func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filename string, expectedSize int64) error {
+func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filename string, expectedSize int64) (string, error) {
 	baseURL := "https://manifest.morrenus.xyz"
 	downloadURL := fmt.Sprintf("%s/download/%s?token=%s", baseURL, appID, downloadToken)
 
@@ -1596,7 +1658,7 @@ func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filenam
 
 	req, err := http.NewRequest("GET", downloadURL, nil)
 	if err != nil {
-		return fmt.Errorf("❌ 创建请求失败: %v", err)
+		return "", fmt.Errorf("❌ 创建请求失败: %v", err)
 	}
 
 	// 设置请求头
@@ -1609,25 +1671,25 @@ func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filenam
 
 	resp, err := md.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("❌ 请求失败: %v", err)
+		return "", fmt.Errorf("❌ 请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("❌ 下载失败，状态码: %d", resp.StatusCode)
+		return "", fmt.Errorf("❌ 下载失败，状态码: %d", resp.StatusCode)
 	}
 
 	// 创建文件
 	file, err := os.Create(safeFilename)
 	if err != nil {
-		return fmt.Errorf("❌ 创建文件失败: %v", err)
+		return "", fmt.Errorf("❌ 创建文件失败: %v", err)
 	}
 	defer file.Close()
 
 	// 下载文件
 	downloadedSize, err := io.Copy(file, resp.Body)
 	if err != nil {
-		return fmt.Errorf("❌ 下载文件失败: %v", err)
+		return "", fmt.Errorf("❌ 下载文件失败: %v", err)
 	}
 
 	// 验证文件大小
@@ -1642,16 +1704,11 @@ func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filenam
 
 	// 解压到ManifestHub目录
 	if err := md.extractZipToManifestDir(safeFilename, appID); err != nil {
-		return fmt.Errorf("❌ 解压文件失败: %v", err)
-	}
-
-	// 删除原始zip文件
-	if err := os.Remove(safeFilename); err != nil {
-		fmt.Printf("⚠️  删除原始文件失败: %v\n", err)
+		return safeFilename, fmt.Errorf("❌ 解压文件失败: %v", err)
 	}
 
 	fmt.Printf("✅ 文件已解压到 %s/%s\n", md.baseDir, appID)
-	return nil
+	return safeFilename, nil
 }
 
 // 使用Manifest API下载清单
@@ -1676,10 +1733,17 @@ func (md *ManifestDownloader) downloadWithManifestAPI(appID string) (bool, error
 	}
 
 	// 下载文件
-	err = md.downloadManifestFile(appID, prepareResp.DownloadToken, prepareResp.Filename, prepareResp.FileSize)
+	zipFilename, err := md.downloadManifestFile(appID, prepareResp.DownloadToken, prepareResp.Filename, prepareResp.FileSize)
 	if err != nil {
 		return false, err
 	}
+
+	// 使用defer确保ZIP文件最终被删除
+	defer func() {
+		if err := os.Remove(zipFilename); err != nil {
+			fmt.Printf("⚠️  删除原始文件失败: %v\n", err)
+		}
+	}()
 
 	// 检查解压后的目录是否包含密钥文件
 	appDir := filepath.Join(md.baseDir, appID)
@@ -1690,5 +1754,6 @@ func (md *ManifestDownloader) downloadWithManifestAPI(appID string) (bool, error
 	if err := md.processDepotKeys(appID); err != nil {
 		return false, fmt.Errorf("❌ 处理密钥文件失败: %v", err)
 	}
+
 	return true, nil
 }
