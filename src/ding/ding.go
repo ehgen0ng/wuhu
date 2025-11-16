@@ -38,6 +38,7 @@ type Config struct {
 	CreateAppManifest bool
 	AddAppIDToGoFile  bool
 	ManifestCookie    string
+	ManifestKey       string
 	UserAgent         string
 }
 
@@ -164,6 +165,8 @@ func (md *ManifestDownloader) loadConfig() {
 				md.config.CreateAppManifest = value == "1"
 			case "addAppIDToGoFile":
 				md.config.AddAppIDToGoFile = value == "1"
+			case "MANIFEST_KEY":
+				md.config.ManifestKey = value
 			case "MANIFEST_COOKIE":
 				md.config.ManifestCookie = value
 			case "USER_AGENT":
@@ -665,17 +668,27 @@ func (md *ManifestDownloader) Run() error {
 		return fmt.Errorf("输入错误: %w", err)
 	}
 
-	// 首先尝试使用Manifest API下载
-	success, err := md.downloadWithManifestAPI(appID)
-	if success {
-		// Manifest API下载成功，直接返回
-		return nil
-	} else if err != nil {
-		// 有配置cookie但下载失败，显示错误信息然后fallback
-		fmt.Printf("❌ Manifest API下载失败: %v\n", err)
+	// 优先级 1: 尝试使用Manifest API (MANIFEST_KEY)
+	if md.config.ManifestKey != "" {
+		success, err := md.downloadWithOfficialAPI(appID)
+		if success {
+			return nil
+		}
+		// 静默失败，继续尝试下一个渠道
+		_ = err // 保持静默，不打印错误
 	}
 
-	// 使用原有的GitHub方法下载
+	// 优先级 2: 尝试使用 Cookie API (MANIFEST_COOKIE)
+	if md.config.ManifestCookie != "" {
+		success, err := md.downloadWithManifestAPI(appID)
+		if success {
+			return nil
+		}
+		// 静默失败，继续尝试 GitHub 方式
+		_ = err // 保持静默，不打印错误
+	}
+
+	// 优先级 3: 使用 GitHub 方法兜底
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -1529,6 +1542,88 @@ func (md *ManifestDownloader) readResponseBody(resp *http.Response) ([]byte, err
 	return io.ReadAll(reader)
 }
 
+// downloadWithOfficialAPI 使用Manifest Manifest API 下载
+func (md *ManifestDownloader) downloadWithOfficialAPI(appID string) (bool, error) {
+	// 检查是否配置了 API Key
+	if md.config.ManifestKey == "" {
+		return false, nil // 没有配置 API Key，返回 false 表示未尝试
+	}
+
+	fmt.Printf("🔍 使用 Manifest API 下载 AppID: %s\n", appID)
+
+	// API 端点
+	apiURL := fmt.Sprintf("https://manifest.morrenus.xyz/api/v1/manifest/%s", appID)
+
+	// 创建请求
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return false, fmt.Errorf("❌ 创建请求失败: %v", err)
+	}
+
+	// 设置认证头
+	req.Header.Set("X-API-Key", md.config.ManifestKey)
+	req.Header.Set("User-Agent", md.config.UserAgent)
+
+	fmt.Printf("📡 正在请求 Manifest API...\n")
+
+	// 发送请求
+	resp, err := md.client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("❌ 请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("❌ API 返回错误状态码: %d", resp.StatusCode)
+	}
+
+	fmt.Printf("✅ API 响应成功\n")
+
+	// 读取响应体（支持 gzip）
+	body, err := md.readResponseBody(resp)
+	if err != nil {
+		return false, fmt.Errorf("❌ 读取响应失败: %v", err)
+	}
+
+	fmt.Printf("💾 文件大小: %d bytes (%.2f MB)\n", len(body), float64(len(body))/1024/1024)
+
+	// 保存 ZIP 文件到临时文件
+	tempDir := filepath.Join(md.baseDir, "temp")
+	os.MkdirAll(tempDir, 0755)
+
+	zipPath := filepath.Join(tempDir, fmt.Sprintf("%s.zip", appID))
+	if err := os.WriteFile(zipPath, body, 0644); err != nil {
+		return false, fmt.Errorf("❌ 保存文件失败: %v", err)
+	}
+
+	// 解压到 ManifestHub 目录
+	fmt.Printf("📂 正在解压文件...\n")
+	if err := md.extractZipToManifestDir(zipPath, appID); err != nil {
+		os.Remove(zipPath)
+		return false, fmt.Errorf("❌ 解压文件失败: %v", err)
+	}
+
+	// 清理临时文件
+	os.Remove(zipPath)
+
+	// 验证是否包含密钥文件
+	appDir := filepath.Join(md.baseDir, appID)
+	if !md.hasKeyFiles(appDir) {
+		os.RemoveAll(appDir)
+		return false, fmt.Errorf("❌ 解压后的目录中未找到密钥文件")
+	}
+
+	fmt.Printf("✅ Manifest API 下载成功，文件已解压到 %s/%s\n", md.baseDir, appID)
+
+	// 处理密钥文件（与 Cookie 方式统一）
+	if err := md.processDepotKeys(appID); err != nil {
+		return false, fmt.Errorf("❌ 处理密钥文件失败: %v", err)
+	}
+
+	return true, nil
+}
+
 // 搜索游戏信息
 func (md *ManifestDownloader) searchGame(appID string) (*GameInfo, error) {
 	baseURL := "https://manifest.morrenus.xyz"
@@ -1718,7 +1813,7 @@ func (md *ManifestDownloader) downloadWithManifestAPI(appID string) (bool, error
 		return false, nil // 没有配置cookie，返回false表示未尝试
 	}
 
-	fmt.Printf("🔍 使用Manifest API下载 AppID: %s\n", appID)
+	fmt.Printf("🔍 使用 Manifest Cookie 下载 AppID: %s\n", appID)
 
 	// 搜索游戏信息
 	_, err := md.searchGame(appID)
