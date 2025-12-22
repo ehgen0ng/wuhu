@@ -1,5 +1,5 @@
 ***************************************************************
-* GreenLuma 2025 1.6.7                                        *
+* GreenLuma 2025 1.7.0                                        *
 * by Steam006                                                 *
 ***************************************************************
 
@@ -30,36 +30,38 @@ Installation:
 Normal mode:
 1. Backup the original bin\x64launcher.exe.
 
-2. Copy GreenLuma2025_Files, GreenLuma_2025_x86.dll, GreenLuma_2025_x64.dll, GreenLumaSettings_2025.exe, DLLInjector.exe and DLLInjector.ini to your Steam folder and x64launcher.exe to the bin folder.
+2. Copy GreenLuma2025_Files, GreenLuma_2025_x86.dll, GreenLuma_2025_x64.dll, GreenLumaSettings_2025.exe, DLLInjector.exe and DLLInjector.ini to your Steam folder and x86launcher.exe to the bin folder.
 
 3. Start Steam with DLLInjector.exe.
 
-Stealth mode (midimap.dll):
+Stealth mode (user32.dll):
 1. Run DeleteSteamAppCache.exe.
 
-2. Copy midimap.dll to your Steam folder.
+2. Copy user32.dll to your Steam folder.
 
 3. Start Steam.
 
-4. midimap.dll and the AppList folder can be deleted after logging in for additional stealth.
+4. user32.dll and the AppList folder can be deleted after logging in for additional stealth.
 
 5. If games or DLC stop being unlocked, run DeleteSteamAppCache.exe again.
 
-Stealth mode (midimap.dll, Steam Families):
+Stealth mode (user32.dll, Steam Families):
 1. Run DeleteSteamAppCache.exe.
 
-2. Copy midimapSteamFamilies.dll to your Steam folder and rename it to midimap.dll.
+2. Copy user32SF.dll to your Steam folder.
 
-3. Start Steam.
+3. Rename user32SF.dll to user32.dll.
 
-4. midimap.dll and the AppList folder can be deleted after logging in for additional stealth.
+4. Start Steam.
 
-5. If games or DLC stop being unlocked, run DeleteSteamAppCache.exe again.
+5. user32.dll and the AppList folder can be deleted after logging in for additional stealth.
+
+6. If games or DLC stop being unlocked, run DeleteSteamAppCache.exe again.
 
 Stealth mode (Any folder):
-1. Copy GreenLuma_2025_x86.dll, GreenLumaSettings_2025.exe, DLLInjector.exe and DLLInjector.ini to any folder on your PC.
+1. Copy GreenLuma_2025_x64.dll, GreenLumaSettings_2025.exe, DLLInjector.exe and DLLInjector.ini to any folder on your PC.
 
-2. Use GreenLumaSettings_2025.exe to set the full paths to Steam.exe and GreenLuma_2025_x86.dll and to enable stealth mode.
+2. Use GreenLumaSettings_2025.exe to set the full paths to Steam.exe and GreenLuma_2025_x64.dll and to enable stealth mode.
 
 3. Start Steam with DLLInjector.exe.
 
