@@ -1,5 +1,5 @@
 ***************************************************************
-* GreenLuma 2025 1.7.0                                        *
+* GreenLuma 2025 1.7.1                                        *
 * by Steam006                                                 *
 ***************************************************************
 
@@ -28,7 +28,7 @@ Region lock bypass
 Installation:
 
 Normal mode:
-1. Backup the original bin\x64launcher.exe.
+1. Backup the original bin\x86launcher.exe.
 
 2. Copy GreenLuma2025_Files, GreenLuma_2025_x86.dll, GreenLuma_2025_x64.dll, GreenLumaSettings_2025.exe, DLLInjector.exe and DLLInjector.ini to your Steam folder and x86launcher.exe to the bin folder.
 
