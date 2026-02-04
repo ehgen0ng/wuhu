@@ -1170,7 +1170,8 @@ func (md *ManifestDownloader) createAppManifest(appID, steamPath string) error {
 	// 获取installdir
 	installdir := md.fetchAppInfoWithRetry(appID)
 	if installdir == "" {
-		// 如果获取installdir失败，跳过文件生成
+		fmt.Printf("⚠️ 获取installdir失败，跳过创建appmanifest文件\n")
+		fmt.Printf("💡 请在wuhu后手动在浏览器打开：steam://run/%s\n", appID)
 		return nil
 	}
 
