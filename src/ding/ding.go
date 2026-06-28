@@ -23,6 +23,8 @@ import (
 //go:embed .env
 var envFile embed.FS
 
+const manifestAPIBaseURL = "https://hubcapmanifest.com"
+
 type DepotInfo struct {
 	DepotID       string   `json:"depot_id"`
 	DecryptionKey string   `json:"decryption_key"`
@@ -1553,7 +1555,7 @@ func (md *ManifestDownloader) downloadWithOfficialAPI(appID string) (bool, error
 	fmt.Printf("🔍 使用 Manifest API 下载 AppID: %s\n", appID)
 
 	// API 端点
-	apiURL := fmt.Sprintf("https://manifest.morrenus.xyz/api/v1/manifest/%s", appID)
+	apiURL := fmt.Sprintf("%s/api/v1/manifest/%s", manifestAPIBaseURL, appID)
 
 	// 创建请求
 	req, err := http.NewRequest("GET", apiURL, nil)
@@ -1627,7 +1629,7 @@ func (md *ManifestDownloader) downloadWithOfficialAPI(appID string) (bool, error
 
 // 搜索游戏信息
 func (md *ManifestDownloader) searchGame(appID string) (*GameInfo, error) {
-	baseURL := "https://manifest.morrenus.xyz"
+	baseURL := manifestAPIBaseURL
 	searchURL := fmt.Sprintf("%s/api/games?limit=100&offset=0&search=%s&platform=&status=&dlc_status=&genre=&sort_by=date_newest", baseURL, appID)
 
 	req, err := http.NewRequest("GET", searchURL, nil)
@@ -1681,7 +1683,7 @@ func (md *ManifestDownloader) searchGame(appID string) (*GameInfo, error) {
 
 // 准备下载
 func (md *ManifestDownloader) prepareDownload(appID string) (*PrepareDownloadResponse, error) {
-	baseURL := "https://manifest.morrenus.xyz"
+	baseURL := manifestAPIBaseURL
 	prepareURL := fmt.Sprintf("%s/download/prepare/%s", baseURL, appID)
 
 	req, err := http.NewRequest("POST", prepareURL, strings.NewReader("{}"))
@@ -1746,7 +1748,7 @@ func (md *ManifestDownloader) prepareDownload(appID string) (*PrepareDownloadRes
 
 // 下载文件
 func (md *ManifestDownloader) downloadManifestFile(appID, downloadToken, filename string, expectedSize int64) (string, error) {
-	baseURL := "https://manifest.morrenus.xyz"
+	baseURL := manifestAPIBaseURL
 	downloadURL := fmt.Sprintf("%s/download/%s?token=%s", baseURL, appID, downloadToken)
 
 	// 创建安全的文件名（移除特殊字符）

@@ -1,5 +1,5 @@
 # wuhu
-一个在[GreenLuma](https://cs.rin.ru/forum/viewtopic.php?f=10&t=103709)基础上所编写的一键解锁Steam DLC，绕过家庭共享不能同时在线限制脚本
+一个在<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=103709" target="_blank" rel="noopener noreferrer">GreenLuma</a>基础上所编写的一键解锁Steam DLC，绕过家庭共享不能同时在线限制脚本
 
 ## start
 
@@ -27,7 +27,7 @@ A4：下载正版分流的 DLC 文件，放入到 本体 的文件夹内即可
 
 Q5：是否支持更多功能
 
-A5：更多功能请在[GreenLuma](https://cs.rin.ru/forum/viewtopic.php?f=10&t=103709)中自行了解
+A5：更多功能请在<a href="https://cs.rin.ru/forum/viewtopic.php?f=10&t=103709" target="_blank" rel="noopener noreferrer">GreenLuma</a>中自行了解
 
 ## License
 
