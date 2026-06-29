@@ -7,10 +7,13 @@ export type PackageItem = {
   sourceZipName: string;
   enabled: boolean;
   importedAt: number;
+  manifestUpdatedAt?: string | null;
+  manifestFileSize?: number | null;
 };
 
 export type AppSettings = {
   steamPath: string | null;
+  hubcapApiKey: string | null;
 };
 
 export type InstallStatus = {
@@ -28,4 +31,40 @@ export type AppState = {
   packages: PackageItem[];
   installStatus: InstallStatus;
   steamClient: SteamClientStatus;
+};
+
+export type SteamSearchPrice = {
+  currency: string;
+  initial: number;
+  final: number;
+};
+
+export type SteamSearchPlatforms = {
+  windows?: boolean;
+  mac?: boolean;
+  linux?: boolean;
+};
+
+export type SteamSearchResult = {
+  itemType: string;
+  name: string;
+  id: number;
+  tinyImage: string | null;
+  price: SteamSearchPrice | null;
+  platforms: SteamSearchPlatforms | null;
+  manifestStatus?: HubcapManifestStatus | null;
+  manifestChecked?: boolean;
+};
+
+export type HubcapManifestStatus = {
+  appId: number;
+  gameName: string | null;
+  status: string | null;
+  available: boolean;
+  manifestFileExists: boolean;
+  updateInProgress: boolean | null;
+  needsUpdate: boolean | null;
+  fileSize: number | null;
+  fileModified: string | null;
+  error: string | null;
 };

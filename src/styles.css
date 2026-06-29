@@ -207,7 +207,8 @@ button:disabled {
   background: rgba(143, 188, 221, 0.14);
 }
 
-.path-row input::placeholder {
+.path-row input::placeholder,
+.search-row input::placeholder {
   color: #6f8499;
 }
 
@@ -218,6 +219,55 @@ button:disabled {
   color: #dff4ff;
   background: rgba(102, 192, 244, 0.1);
   margin-bottom: 18px;
+}
+
+.search-panel {
+  margin-bottom: 24px;
+}
+
+.search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.search-row input {
+  min-width: 0;
+  height: 44px;
+  border-radius: 8px;
+  border: 1px solid rgba(143, 188, 221, 0.18);
+  outline: 0;
+  padding: 0 14px;
+  color: #f5fbff;
+  background: rgba(11, 18, 26, 0.62);
+}
+
+.search-row input:focus {
+  border-color: rgba(102, 192, 244, 0.56);
+}
+
+.result-section {
+  margin-bottom: 28px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.section-heading h2 {
+  margin: 0;
+  color: #f5fbff;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.section-heading span {
+  color: #8fa3ba;
+  font-size: 14px;
 }
 
 .package-grid {
@@ -235,6 +285,8 @@ button:disabled {
 }
 
 .card-art {
+  position: relative;
+  overflow: hidden;
   height: 116px;
   padding: 16px;
   display: flex;
@@ -256,12 +308,26 @@ button:disabled {
 }
 
 .card-art span {
+  position: relative;
+  z-index: 1;
   color: rgba(255, 255, 255, 0.88);
   font-size: 13px;
   font-weight: 800;
   border-radius: 999px;
   padding: 6px 10px;
   background: rgba(0, 0, 0, 0.22);
+}
+
+.card-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-art img + span {
+  background: rgba(0, 0, 0, 0.42);
 }
 
 .card-body {
@@ -295,6 +361,11 @@ button:disabled {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+
+.add-card-button {
+  min-width: 86px;
+  padding: 0 13px;
 }
 
 .icon-button {
@@ -452,6 +523,22 @@ button:disabled {
   border-color: rgba(102, 192, 244, 0.56);
 }
 
+.key-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 12px;
+}
+
+.manifest-meta {
+  margin-top: 7px;
+  color: #8fa3ba;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.manifest-meta.good {
+  color: #7cc7f0;
+}
+
 .choice-row {
   display: flex;
   align-items: center;
@@ -560,8 +647,10 @@ button:disabled {
   }
 
   .page-header,
-  .path-row {
+  .path-row,
+  .search-row {
     display: grid;
+    grid-template-columns: 1fr;
   }
 
   .header-actions,

@@ -7,5 +7,17 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    proxy: {
+      "/steam-api": {
+        target: "https://store.steampowered.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/steam-api/, ""),
+      },
+      "/hubcap-api": {
+        target: "https://hubcapmanifest.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/hubcap-api/, ""),
+      },
+    },
   },
 });

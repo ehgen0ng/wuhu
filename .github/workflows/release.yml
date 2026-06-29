@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -77,6 +79,35 @@ jobs:
           }
           "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
 
+      - name: Build release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_ref="$GITHUB_SHA"
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null; then
+            target_ref="$RELEASE_TAG"
+          fi
+
+          previous_tag="$(git describe --tags --abbrev=0 "${target_ref}^" 2>/dev/null || true)"
+
+          if [ -n "$previous_tag" ]; then
+            range="${previous_tag}..${target_ref}"
+          else
+            range="$target_ref"
+          fi
+
+          git log "$range" \
+            --pretty=format:"- %s ([%h](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/%H))" \
+            > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            subject="$(git log -1 --pretty=%s "$target_ref")"
+            short_sha="$(git rev-parse --short "$target_ref")"
+            sha="$(git rev-parse "$target_ref")"
+            echo "- ${subject} ([${short_sha}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${sha}))" > release-notes.md
+          fi
+
       - name: Publish GitHub Release
         shell: pwsh
         env:
@@ -85,6 +116,7 @@ jobs:
           $tag = $env:RELEASE_TAG
           if (gh release view $tag 2>$null) {
             gh release upload $tag release\wuhu.zip --clobber
+            gh release edit $tag --notes-file release-notes.md
           } else {
-            gh release create $tag release\wuhu.zip --target $env:GITHUB_SHA --title $tag --notes "Windows x64 build."
+            gh release create $tag release\wuhu.zip --target $env:GITHUB_SHA --title $tag --notes-file release-notes.md
           }

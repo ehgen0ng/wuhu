@@ -5,23 +5,43 @@ import {
   CheckCircle2,
   FolderCog,
   FolderOpen,
+  KeyRound,
   LockKeyhole,
   PackagePlus,
   RefreshCcw,
+  Search,
   Settings,
   Trash2,
   Upload,
   Wrench,
 } from "lucide-react";
-import { ChangeEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import appIcon from "./assets/icon.png";
 import { Switch } from "./Switch";
-import type { AppState, PackageItem } from "./types";
+import type {
+  AppState,
+  HubcapManifestStatus,
+  PackageItem,
+  SteamSearchPlatforms,
+  SteamSearchPrice,
+  SteamSearchResult,
+} from "./types";
 
 type Page = "packages" | "settings";
 type Notice = {
   page: Page;
   text: string;
+};
+
+type RawSteamSearchItem = {
+  type?: string;
+  itemType?: string;
+  name?: string;
+  id?: number;
+  tiny_image?: string;
+  tinyImage?: string | null;
+  price?: SteamSearchPrice | null;
+  platforms?: SteamSearchPlatforms | null;
 };
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -44,6 +64,177 @@ function packageSubtitle(pkg: PackageItem) {
   const app = pkg.appId ? `AppID ${pkg.appId}` : "未识别 AppID";
   if (!pkg.manifestFiles.length) return app;
   return `${app} · ${pkg.manifestFiles.length} 个 manifest`;
+}
+
+function isTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function normalizeSteamSearchItem(item: RawSteamSearchItem): SteamSearchResult | null {
+  const itemType = item.itemType ?? item.type ?? "";
+  const name = item.name?.trim() ?? "";
+  if (!name || typeof item.id !== "number") return null;
+
+  return {
+    itemType,
+    name,
+    id: item.id,
+    tinyImage: item.tinyImage ?? item.tiny_image ?? null,
+    price: item.price ?? null,
+    platforms: item.platforms ?? null,
+  };
+}
+
+async function searchSteamStore(query: string): Promise<SteamSearchResult[]> {
+  if (isTauriRuntime()) {
+    const items = await call<RawSteamSearchItem[]>("search_steam_games", { query });
+    return items.map(normalizeSteamSearchItem).filter((item): item is SteamSearchResult => Boolean(item));
+  }
+
+  const url = new URL("/steam-api/api/storesearch/", window.location.origin);
+  url.searchParams.set("term", query);
+  url.searchParams.set("l", "schinese");
+  url.searchParams.set("cc", "cn");
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Steam 搜索失败：HTTP ${response.status}`);
+  }
+
+  const data = (await response.json()) as { items?: RawSteamSearchItem[] };
+  return (data.items ?? [])
+    .map(normalizeSteamSearchItem)
+    .filter((item): item is SteamSearchResult => Boolean(item));
+}
+
+function formatSteamPrice(price: SteamSearchPrice | null) {
+  if (!price) return null;
+  if (price.final === 0) return "免费";
+  const value = (price.final / 100).toFixed(2);
+  if (price.currency === "CNY") return `¥ ${value}`;
+  return `${price.currency} ${value}`;
+}
+
+function searchResultSubtitle(item: SteamSearchResult) {
+  const price = formatSteamPrice(item.price);
+  return price ? `AppID ${item.id} · ${price}` : `AppID ${item.id}`;
+}
+
+function searchResultBadge(item: SteamSearchResult) {
+  if (item.platforms?.windows) return "Windows";
+  return "Steam";
+}
+
+function formatManifestTime(value: string | null | undefined) {
+  if (!value) return "未知";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatFileSize(value: number | null | undefined) {
+  if (!value) return null;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function manifestStatusText(item: SteamSearchResult) {
+  if (!item.manifestChecked) return null;
+  const status = item.manifestStatus;
+  if (!status) return null;
+  if (status.updateInProgress) return null;
+  if (!canAddManifest(item)) return null;
+  const size = formatFileSize(status.fileSize);
+  return `清单更新：${formatManifestTime(status.fileModified)}${size ? ` · ${size}` : ""}`;
+}
+
+function canAddManifest(item: SteamSearchResult) {
+  const status = item.manifestStatus;
+  return Boolean(
+    item.manifestChecked &&
+      status?.available &&
+      status.manifestFileExists &&
+      !status.updateInProgress &&
+      status.status?.toLowerCase() === "available",
+  );
+}
+
+function normalizeHubcapStatus(appId: number, raw: Record<string, unknown>): HubcapManifestStatus {
+  const status = typeof raw.status === "string" ? raw.status : null;
+  const updateInProgress = typeof raw.update_in_progress === "boolean" ? raw.update_in_progress : null;
+  const manifestFileExists = raw.manifest_file_exists === true;
+  const available =
+    manifestFileExists && status?.toLowerCase() === "available" && updateInProgress !== true;
+
+  return {
+    appId: Number(raw.app_id ?? appId),
+    gameName: typeof raw.game_name === "string" ? raw.game_name : null,
+    status,
+    available,
+    manifestFileExists,
+    updateInProgress,
+    needsUpdate: typeof raw.needs_update === "boolean" ? raw.needs_update : null,
+    fileSize: typeof raw.file_size === "number" ? raw.file_size : null,
+    fileModified: typeof raw.file_modified === "string" ? raw.file_modified : null,
+    error: typeof raw.detail === "string" ? raw.detail : null,
+  };
+}
+
+async function fetchHubcapStatusInBrowser(appId: number, apiKey: string): Promise<HubcapManifestStatus> {
+  const response = await fetch(`/hubcap-api/api/v1/status/${appId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const text = await response.text();
+  const raw = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+
+  if (!response.ok) {
+    return {
+      appId,
+      gameName: null,
+      status: String(response.status),
+      available: false,
+      manifestFileExists: false,
+      updateInProgress: null,
+      needsUpdate: null,
+      fileSize: null,
+      fileModified: null,
+      error: typeof raw.detail === "string" ? raw.detail : null,
+    };
+  }
+
+  return normalizeHubcapStatus(appId, raw);
+}
+
+function fallbackState(previous: AppState | null): AppState {
+  return (
+    previous ?? {
+      settings: { steamPath: null, hubcapApiKey: null },
+      packages: [],
+      installStatus: { installed: false },
+      steamClient: { version: null, clientBuildDate: null, locked: false },
+    }
+  );
+}
+
+function packageFromSearchResult(item: SteamSearchResult): PackageItem {
+  return {
+    id: item.id.toString(),
+    title: item.name,
+    appId: item.id,
+    luaFileName: `wuhu_${item.id}.lua`,
+    manifestFiles: [],
+    sourceZipName: "Steam 搜索",
+    enabled: true,
+    importedAt: Math.floor(Date.now() / 1000),
+    manifestUpdatedAt: null,
+    manifestFileSize: null,
+  };
 }
 
 function formatSteamVersion(version: string | null | undefined) {
@@ -71,6 +262,10 @@ export default function App() {
   const [page, setPage] = useState<Page>("packages");
   const [state, setState] = useState<AppState | null>(null);
   const [steamPathInput, setSteamPathInput] = useState("");
+  const [hubcapKeyInput, setHubcapKeyInput] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState<SteamSearchResult[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -78,10 +273,18 @@ export default function App() {
   const packages = state?.packages ?? [];
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      const nextState = fallbackState(null);
+      setState(nextState);
+      setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
+      return;
+    }
+
     call<AppState>("get_initial_state")
       .then((nextState) => {
         setState(nextState);
         setSteamPathInput(nextState.settings.steamPath ?? "");
+        setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
       })
       .catch((error) => setNotice({ page: "packages", text: String(error) }));
   }, []);
@@ -98,6 +301,7 @@ export default function App() {
       const nextState = await call<AppState>("get_initial_state");
       setState(nextState);
       setSteamPathInput(nextState.settings.steamPath ?? "");
+      setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
     } catch (error) {
       setNotice({ page: "packages", text: String(error) });
     } finally {
@@ -118,6 +322,7 @@ export default function App() {
       if (nextState) {
         setState(nextState);
         setSteamPathInput(nextState.settings.steamPath ?? "");
+        setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
       }
       if (success) {
         setNotice({ page: noticePage, text: success });
@@ -148,6 +353,101 @@ export default function App() {
     );
   }
 
+  async function searchSteamGames(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = searchTerm.trim();
+    if (!query) {
+      setNotice({ page: "packages", text: "请输入游戏名称。" });
+      return;
+    }
+
+    try {
+      setBusy("steam-search");
+      setNotice(null);
+      setSearchResults([]);
+      setHasSearched(true);
+      const results = await searchSteamStore(query);
+      const resultsWithStatuses = await attachHubcapStatuses(results);
+      setSearchResults(resultsWithStatuses);
+      if (!results.length) {
+        setNotice({ page: "packages", text: "没有搜索结果。" });
+      }
+    } catch (error) {
+      setSearchResults([]);
+      setNotice({ page: "packages", text: String(error) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function attachHubcapStatuses(results: SteamSearchResult[]) {
+    if (!results.length) return results;
+
+    const apiKey = state?.settings.hubcapApiKey?.trim() || hubcapKeyInput.trim();
+    if (!apiKey) {
+      setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。" });
+      return results.map((item) => ({ ...item, manifestChecked: false, manifestStatus: null }));
+    }
+
+    if (!isTauriRuntime()) {
+      const statuses = await Promise.all(results.map((item) => fetchHubcapStatusInBrowser(item.id, apiKey)));
+      const byAppId = new Map(statuses.map((status) => [status.appId, status]));
+      return results.map((item) => ({
+        ...item,
+        manifestChecked: true,
+        manifestStatus: byAppId.get(item.id) ?? null,
+      }));
+    }
+
+    const statuses = await call<HubcapManifestStatus[]>("check_hubcap_manifest_statuses", {
+      appIds: results.map((item) => item.id),
+    });
+    const byAppId = new Map(statuses.map((status) => [status.appId, status]));
+    return results.map((item) => ({
+      ...item,
+      manifestChecked: true,
+      manifestStatus: byAppId.get(item.id) ?? null,
+    }));
+  }
+
+  async function addSearchResult(item: SteamSearchResult) {
+    const label = `add-hubcap-${item.id}`;
+    try {
+      setBusy(label);
+      setNotice(null);
+
+      if (!canAddManifest(item)) {
+        throw new Error("当前没有可用清单。");
+      }
+
+      if (isTauriRuntime()) {
+        const nextState = await call<AppState>("add_hubcap_manifest", {
+          appId: item.id,
+          title: item.name,
+        });
+        setState(nextState);
+        setSteamPathInput(nextState.settings.steamPath ?? "");
+      } else {
+        setState((previous) => {
+          const base = fallbackState(previous);
+          const nextPackage = packageFromSearchResult(item);
+          const packages = base.packages
+            .filter((pkg) => pkg.id !== nextPackage.id)
+            .concat(nextPackage)
+            .sort((left, right) => left.title.localeCompare(right.title, "zh-Hans-CN"));
+
+          return { ...base, packages };
+        });
+      }
+
+      setNotice({ page: "packages", text: `已添加 ${item.name}。` });
+    } catch (error) {
+      setNotice({ page: "packages", text: String(error) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function togglePackage(pkg: PackageItem, enabled: boolean) {
     await runAction(
       `toggle-${pkg.id}`,
@@ -171,6 +471,26 @@ export default function App() {
       "settings",
       () => call<AppState>("set_steam_path", { path: steamPathInput.trim() }),
       "Steam 路径已保存，请重新启用需要的清单。",
+    );
+  }
+
+  async function saveHubcapKey() {
+    if (!isTauriRuntime()) {
+      const apiKey = hubcapKeyInput.trim();
+      const base = fallbackState(state);
+      setState({
+        ...base,
+        settings: { ...base.settings, hubcapApiKey: apiKey || null },
+      });
+      setNotice({ page: "settings", text: "Hubcap Key 已保存。" });
+      return;
+    }
+
+    await runAction(
+      "hubcap-key",
+      "settings",
+      () => call<AppState>("set_hubcap_api_key", { apiKey: hubcapKeyInput.trim() }),
+      "Hubcap Key 已保存。",
     );
   }
 
@@ -221,6 +541,7 @@ export default function App() {
 
   const hasSteamPath = Boolean(state?.settings.steamPath);
   const isRefreshing = busy === "refresh";
+  const isSearching = busy === "steam-search";
 
   return (
     <div className="app-shell">
@@ -281,6 +602,72 @@ export default function App() {
 
             {notice?.page === "packages" && <div className="notice">{notice.text}</div>}
 
+            <form className="search-panel" onSubmit={searchSteamGames}>
+              <div className="search-row">
+                <input
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  placeholder="搜索 Steam 游戏名"
+                  disabled={Boolean(busy)}
+                />
+                <button className="primary-button" type="submit" disabled={Boolean(busy) || !searchTerm.trim()}>
+                  <Search className={isSearching ? "spin" : undefined} size={17} />
+                  搜索
+                </button>
+              </div>
+            </form>
+
+            {hasSearched && searchResults.length > 0 && (
+              <section className="result-section">
+                <div className="section-heading">
+                  <h2>搜索结果</h2>
+                  <span>{searchResults.length} 个结果</span>
+                </div>
+                <div className="package-grid">
+                  {searchResults.map((item, index) => {
+                    const existingPackage = packages.find(
+                      (pkg) => pkg.appId === item.id || pkg.id === item.id.toString(),
+                    );
+                    const canAdd = canAddManifest(item);
+                    const manifestText = manifestStatusText(item);
+                    return (
+                      <article className="package-card search-card" key={item.id}>
+                        <div className={`card-art card-art-${index % 4}`}>
+                          {item.tinyImage && <img src={item.tinyImage} alt="" />}
+                          <span>{searchResultBadge(item)}</span>
+                        </div>
+                        <div className="card-body">
+                          <div className="card-main">
+                            <h2>{item.name}</h2>
+                            <p>{searchResultSubtitle(item)}</p>
+                            {manifestText && <div className="manifest-meta good">{manifestText}</div>}
+                            {existingPackage?.manifestUpdatedAt && (
+                              <div className="manifest-meta">
+                                已添加：{formatManifestTime(existingPackage.manifestUpdatedAt)}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="card-actions">
+                            {canAdd && (
+                              <button
+                                className="ghost-button add-card-button"
+                                onClick={() => addSearchResult(item)}
+                                disabled={Boolean(busy)}
+                              >
+                                <PackagePlus size={17} />
+                                {existingPackage ? "重新添加" : "添加"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
             <div className="package-grid">
               {packages.map((pkg, index) => (
                 <article className="package-card" key={pkg.id}>
@@ -291,6 +678,11 @@ export default function App() {
                     <div className="card-main">
                       <h2>{pkg.title}</h2>
                       <p>{packageSubtitle(pkg)}</p>
+                      {pkg.manifestUpdatedAt && (
+                        <div className="manifest-meta">
+                          清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
+                        </div>
+                      )}
                     </div>
 
                     <div className="card-actions">
@@ -360,6 +752,27 @@ export default function App() {
                 </button>
                 <button className="primary-button" onClick={saveSteamPath} disabled={Boolean(busy)}>
                   保存
+                </button>
+              </div>
+            </div>
+
+            <div className="settings-panel">
+              <div className="panel-title">
+                <KeyRound size={20} />
+                <div>
+                  <h2>Hubcap Key</h2>
+                </div>
+              </div>
+              <div className="path-row key-row">
+                <input
+                  type="password"
+                  value={hubcapKeyInput}
+                  onChange={(event) => setHubcapKeyInput(event.target.value)}
+                  placeholder="Hubcap Key"
+                  autoComplete="off"
+                />
+                <button className="primary-button" onClick={saveHubcapKey} disabled={Boolean(busy)}>
+                  保存 Key
                 </button>
               </div>
             </div>

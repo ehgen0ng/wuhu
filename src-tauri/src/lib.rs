@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{Cursor, Read, Seek},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::AppHandle;
 use zip::ZipArchive;
@@ -43,7 +43,10 @@ struct AppStore {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
+    #[serde(default)]
     steam_path: Option<String>,
+    #[serde(default)]
+    hubcap_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,10 @@ struct PackageItem {
     source_zip_name: String,
     enabled: bool,
     imported_at: u64,
+    #[serde(default)]
+    manifest_updated_at: Option<String>,
+    #[serde(default)]
+    manifest_file_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +87,67 @@ struct SteamClientStatus {
     version: Option<String>,
     client_build_date: Option<u64>,
     locked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamSearchItem {
+    #[serde(rename = "type", alias = "itemType", default)]
+    item_type: String,
+    name: String,
+    id: u32,
+    #[serde(rename = "tiny_image", alias = "tinyImage", default)]
+    tiny_image: Option<String>,
+    #[serde(default)]
+    price: Option<SteamSearchPrice>,
+    #[serde(default)]
+    platforms: Option<SteamSearchPlatforms>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamSearchPrice {
+    #[serde(default)]
+    currency: String,
+    #[serde(default)]
+    initial: u32,
+    #[serde(rename = "final")]
+    #[serde(default)]
+    final_price: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SteamSearchPlatforms {
+    windows: Option<bool>,
+    mac: Option<bool>,
+    linux: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SteamSearchResponse {
+    items: Vec<SteamSearchItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HubcapErrorResponse {
+    detail: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HubcapManifestStatus {
+    app_id: u32,
+    game_name: Option<String>,
+    status: Option<String>,
+    available: bool,
+    manifest_file_exists: bool,
+    update_in_progress: Option<bool>,
+    needs_update: Option<bool>,
+    file_size: Option<u64>,
+    file_modified: Option<String>,
+    error: Option<String>,
 }
 
 #[tauri::command]
@@ -134,6 +202,96 @@ fn import_package_from_bytes(
     let bytes = general_purpose::STANDARD
         .decode(data_base64)
         .map_err(|err| format!("zip 数据解码失败：{err}"))?;
+    import_package_archive(&app, file_name, bytes, None, None, None)
+}
+
+#[tauri::command]
+fn set_hubcap_api_key(app: AppHandle, api_key: String) -> Result<AppState, String> {
+    let mut store = load_store()?;
+    let trimmed = api_key.trim();
+    store.settings.hubcap_api_key = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    save_store(&store)?;
+    build_state(&app, store)
+}
+
+#[tauri::command]
+async fn check_hubcap_manifest_statuses(
+    app_ids: Vec<u32>,
+) -> Result<Vec<HubcapManifestStatus>, String> {
+    let store = load_store()?;
+    let api_key = hubcap_api_key(&store)?;
+    let client = hubcap_client()?;
+    let mut statuses = Vec::new();
+
+    for app_id in app_ids.into_iter().filter(|app_id| *app_id > 0).take(24) {
+        statuses.push(fetch_hubcap_manifest_status(&client, &api_key, app_id).await?);
+    }
+
+    Ok(statuses)
+}
+
+#[tauri::command]
+async fn add_hubcap_manifest(
+    app: AppHandle,
+    app_id: u32,
+    title: String,
+) -> Result<AppState, String> {
+    if app_id == 0 {
+        return Err("AppID 无效".to_string());
+    }
+
+    let store = load_store()?;
+    let api_key = hubcap_api_key(&store)?;
+    let client = hubcap_client()?;
+    let status = fetch_hubcap_manifest_status(&client, &api_key, app_id).await?;
+    if !status.available || status.update_in_progress.unwrap_or(false) {
+        return Err("当前没有可用清单".to_string());
+    }
+
+    let response = client
+        .get(format!("https://hubcapmanifest.com/api/v1/manifest/{app_id}"))
+        .bearer_auth(&api_key)
+        .send()
+        .await
+        .map_err(|err| format!("下载清单失败：{err}"))?;
+
+    let status_code = response.status();
+    if !status_code.is_success() {
+        let detail = hubcap_error_detail(response).await;
+        return Err(format!(
+            "下载清单失败：HTTP {status_code}{}",
+            detail_prefix(&detail)
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| format!("读取清单失败：{err}"))?
+        .to_vec();
+    let title = normalize_title(&title, app_id);
+    import_package_archive(
+        &app,
+        format!("{app_id}.zip"),
+        bytes,
+        Some(title),
+        status.file_modified,
+        status.file_size,
+    )
+}
+
+fn import_package_archive(
+    app: &AppHandle,
+    file_name: String,
+    bytes: Vec<u8>,
+    fallback_title: Option<String>,
+    manifest_updated_at: Option<String>,
+    manifest_file_size: Option<u64>,
+) -> Result<AppState, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice()))
         .map_err(|err| format!("zip 读取失败：{err}"))?;
 
@@ -156,17 +314,22 @@ fn import_package_from_bytes(
         .file_stem()
         .and_then(OsStr::to_str)
         .unwrap_or("package");
-    let metadata = parse_package_metadata(&lua_file_name, &lua_content, zip_stem);
+    let mut metadata = parse_package_metadata(&lua_file_name, &lua_content, zip_stem);
+    if let Some(title) = fallback_title {
+        if metadata.title == metadata.id || metadata.title.trim().is_empty() {
+            metadata.title = title;
+        }
+    }
     let package_id = sanitize_id(&metadata.id);
     if package_id.is_empty() {
         return Err("无法生成包 ID".to_string());
     }
 
+    let mut store = load_store()?;
     let root = portable_data_dir()?;
+    remove_existing_package(&mut store, &package_id)?;
+
     let package_dir = root.join("packages").join(&package_id);
-    if package_dir.exists() {
-        fs::remove_dir_all(&package_dir).map_err(|err| format!("清理旧包失败：{err}"))?;
-    }
     let manifest_dir = package_dir.join("manifests");
     fs::create_dir_all(&manifest_dir).map_err(|err| format!("创建包目录失败：{err}"))?;
     fs::write(package_dir.join("source.lua"), lua_content.as_bytes())
@@ -197,7 +360,6 @@ fn import_package_from_bytes(
     }
     manifest_files.sort();
 
-    let mut store = load_store()?;
     let record = PackageItem {
         id: package_id.clone(),
         title: metadata.title,
@@ -207,10 +369,54 @@ fn import_package_from_bytes(
         source_zip_name: file_name,
         enabled: true,
         imported_at: now_seconds(),
+        manifest_updated_at,
+        manifest_file_size,
     };
     let package_to_sync = record.clone();
 
-    store.packages.retain(|package| package.id != package_id);
+    store.packages.push(record);
+    store
+        .packages
+        .sort_by(|left, right| left.title.cmp(&right.title));
+    save_store(&store)?;
+    sync_package_enabled(&store, &package_to_sync)?;
+    build_state(app, store)
+}
+
+#[tauri::command]
+fn add_steam_game(app: AppHandle, app_id: u32, title: String) -> Result<AppState, String> {
+    if app_id == 0 {
+        return Err("AppID 无效".to_string());
+    }
+
+    let title = normalize_title(&title, app_id);
+    let package_id = app_id.to_string();
+    let lua_content = build_basic_lua(app_id, &title);
+
+    let mut store = load_store()?;
+    let root = portable_data_dir()?;
+    remove_existing_package(&mut store, &package_id)?;
+
+    let package_dir = root.join("packages").join(&package_id);
+    fs::create_dir_all(package_dir.join("manifests"))
+        .map_err(|err| format!("创建包目录失败：{err}"))?;
+    fs::write(package_dir.join("source.lua"), lua_content.as_bytes())
+        .map_err(|err| format!("保存 Lua 失败：{err}"))?;
+
+    let record = PackageItem {
+        id: package_id.clone(),
+        title,
+        app_id: Some(app_id),
+        lua_file_name: format!("wuhu_{package_id}.lua"),
+        manifest_files: Vec::new(),
+        source_zip_name: "Steam 搜索".to_string(),
+        enabled: true,
+        imported_at: now_seconds(),
+        manifest_updated_at: None,
+        manifest_file_size: None,
+    };
+    let package_to_sync = record.clone();
+
     store.packages.push(record);
     store
         .packages
@@ -245,17 +451,8 @@ fn delete_package(app: AppHandle, id: String) -> Result<AppState, String> {
         .cloned()
         .ok_or_else(|| "没有找到这个清单".to_string())?;
 
-    if let Some(steam_path) = store.settings.steam_path.as_deref() {
-        remove_active_lua(Path::new(steam_path), &package)?;
-    }
-
-    store.packages.retain(|item| item.id != id);
+    remove_existing_package(&mut store, &package.id)?;
     save_store(&store)?;
-
-    let package_dir = portable_data_dir()?.join("packages").join(&package.id);
-    if package_dir.exists() {
-        fs::remove_dir_all(&package_dir).map_err(|err| format!("删除本地包失败：{err}"))?;
-    }
 
     build_state(&app, store)
 }
@@ -326,6 +523,186 @@ fn set_steam_client_version_locked(app: AppHandle, locked: bool) -> Result<AppSt
     build_state(&app, store)
 }
 
+#[tauri::command]
+async fn search_steam_games(query: String) -> Result<Vec<SteamSearchItem>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .user_agent("wuhu/3.0.0")
+        .build()
+        .map_err(|err| format!("创建 Steam 搜索请求失败：{err}"))?;
+    let response = client
+        .get("https://store.steampowered.com/api/storesearch/")
+        .query(&[("term", query), ("l", "schinese"), ("cc", "cn")])
+        .send()
+        .await
+        .map_err(|err| format!("Steam 搜索请求失败：{err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Steam 搜索失败：HTTP {}", response.status()));
+    }
+
+    let body = response
+        .json::<SteamSearchResponse>()
+        .await
+        .map_err(|err| format!("解析 Steam 搜索结果失败：{err}"))?;
+    Ok(body
+        .items
+        .into_iter()
+        .filter(|item| item.item_type == "app" && !item.name.trim().is_empty())
+        .take(24)
+        .collect())
+}
+
+fn hubcap_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("wuhu/3.0.0")
+        .build()
+        .map_err(|err| format!("创建清单请求失败：{err}"))
+}
+
+fn hubcap_api_key(store: &AppStore) -> Result<String, String> {
+    store
+        .settings
+        .hubcap_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "请先在设置里保存 Key".to_string())
+}
+
+async fn fetch_hubcap_manifest_status(
+    client: &reqwest::Client,
+    api_key: &str,
+    app_id: u32,
+) -> Result<HubcapManifestStatus, String> {
+    let response = client
+        .get(format!("https://hubcapmanifest.com/api/v1/status/{app_id}"))
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|err| format!("检查清单失败：{err}"))?;
+
+    let status_code = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取清单状态失败：{err}"))?;
+
+    if status_code == reqwest::StatusCode::UNAUTHORIZED
+        || status_code == reqwest::StatusCode::FORBIDDEN
+    {
+        let detail = parse_hubcap_error_detail(&text);
+        return Err(format!("Key 无效或无权限{}", detail_prefix(&detail)));
+    }
+
+    if !status_code.is_success() {
+        return Ok(HubcapManifestStatus {
+            app_id,
+            game_name: None,
+            status: Some(status_code.to_string()),
+            available: false,
+            manifest_file_exists: false,
+            update_in_progress: None,
+            needs_update: None,
+            file_size: None,
+            file_modified: None,
+            error: parse_hubcap_error_detail(&text),
+        });
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("解析清单状态失败：{err}"))?;
+    let manifest_file_exists = value_as_bool(&json, "manifest_file_exists").unwrap_or(false);
+    let status = value_as_string(&json, "status");
+    let update_in_progress = value_as_bool(&json, "update_in_progress");
+
+    Ok(HubcapManifestStatus {
+        app_id: value_as_u32(&json, "app_id").unwrap_or(app_id),
+        game_name: value_as_string(&json, "game_name")
+            .or_else(|| value_as_string(&json, "app_name")),
+        available: manifest_file_exists
+            && status
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("available"))
+                .unwrap_or(false)
+            && !update_in_progress.unwrap_or(false),
+        status,
+        manifest_file_exists,
+        update_in_progress,
+        needs_update: value_as_bool(&json, "needs_update"),
+        file_size: value_as_u64(&json, "file_size"),
+        file_modified: value_as_string(&json, "file_modified")
+            .or_else(|| value_as_string(&json, "updated_at"))
+            .or_else(|| value_as_string(&json, "last_modified")),
+        error: None,
+    })
+}
+
+async fn hubcap_error_detail(response: reqwest::Response) -> Option<String> {
+    response
+        .text()
+        .await
+        .ok()
+        .and_then(|text| parse_hubcap_error_detail(&text))
+}
+
+fn parse_hubcap_error_detail(text: &str) -> Option<String> {
+    serde_json::from_str::<HubcapErrorResponse>(text)
+        .ok()
+        .and_then(|body| body.detail.or(body.error))
+        .filter(|message| !message.trim().is_empty())
+        .or_else(|| {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.chars().take(180).collect())
+            }
+        })
+}
+
+fn detail_prefix(detail: &Option<String>) -> String {
+    detail
+        .as_deref()
+        .map(|message| format!("：{message}"))
+        .unwrap_or_default()
+}
+
+fn value_as_string(json: &serde_json::Value, key: &str) -> Option<String> {
+    json.get(key).and_then(|value| match value {
+        serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.to_string()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    })
+}
+
+fn value_as_bool(json: &serde_json::Value, key: &str) -> Option<bool> {
+    json.get(key).and_then(|value| match value {
+        serde_json::Value::Bool(value) => Some(*value),
+        serde_json::Value::String(text) => text.parse().ok(),
+        _ => None,
+    })
+}
+
+fn value_as_u32(json: &serde_json::Value, key: &str) -> Option<u32> {
+    value_as_u64(json, key).and_then(|value| u32::try_from(value).ok())
+}
+
+fn value_as_u64(json: &serde_json::Value, key: &str) -> Option<u64> {
+    json.get(key).and_then(|value| match value {
+        serde_json::Value::Number(number) => number.as_u64(),
+        serde_json::Value::String(text) => text.parse().ok(),
+        _ => None,
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -334,11 +711,16 @@ pub fn run() {
             detect_steam_path,
             set_steam_path,
             import_package_from_bytes,
+            set_hubcap_api_key,
+            check_hubcap_manifest_statuses,
+            add_hubcap_manifest,
             set_package_enabled,
             delete_package,
             install_opensteamtool,
             restore_opensteamtool,
-            set_steam_client_version_locked
+            set_steam_client_version_locked,
+            search_steam_games,
+            add_steam_game
         ])
         .run(tauri::generate_context!())
         .expect("error while running wuhu");
@@ -469,7 +851,7 @@ fn sync_package_enabled(store: &AppStore, package: &PackageItem) -> Result<(), S
     if package.enabled {
         apply_package(&root, steam_root, package)
     } else {
-        remove_active_lua(steam_root, package)
+        remove_active_package(steam_root, package)
     }
 }
 
@@ -504,6 +886,42 @@ fn remove_active_lua(steam_root: &Path, package: &PackageItem) -> Result<(), Str
     if active_lua.exists() {
         fs::remove_file(&active_lua).map_err(|err| format!("移除启用 Lua 失败：{err}"))?;
     }
+    Ok(())
+}
+
+fn remove_active_package(steam_root: &Path, package: &PackageItem) -> Result<(), String> {
+    remove_active_lua(steam_root, package)?;
+
+    for manifest_name in &package.manifest_files {
+        let manifest_path = steam_root.join("depotcache").join(manifest_name);
+        if manifest_path.exists() {
+            fs::remove_file(&manifest_path)
+                .map_err(|err| format!("移除 manifest {manifest_name} 失败：{err}"))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_existing_package(store: &mut AppStore, package_id: &str) -> Result<(), String> {
+    if let Some(existing) = store
+        .packages
+        .iter()
+        .find(|package| package.id == package_id)
+        .cloned()
+    {
+        if let Some(steam_path) = store.settings.steam_path.as_deref() {
+            remove_active_package(Path::new(steam_path), &existing)?;
+        }
+    }
+
+    store.packages.retain(|package| package.id != package_id);
+
+    let package_dir = portable_data_dir()?.join("packages").join(package_id);
+    if package_dir.exists() {
+        fs::remove_dir_all(&package_dir).map_err(|err| format!("清理旧包失败：{err}"))?;
+    }
+
     Ok(())
 }
 
@@ -765,6 +1183,24 @@ fn parse_package_metadata(
     let title = parse_title(lua_content).unwrap_or_else(|| id.clone());
 
     PackageMetadata { id, title, app_id }
+}
+
+fn normalize_title(title: &str, app_id: u32) -> String {
+    let title = title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        app_id.to_string()
+    } else {
+        title
+    }
+}
+
+fn build_basic_lua(app_id: u32, title: &str) -> String {
+    format!("-- {title}\naddappid({app_id})\n")
 }
 
 fn parse_first_addappid(text: &str) -> Option<u32> {
