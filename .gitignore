@@ -1,7 +1,9 @@
 .env
+node_modules/
 
 # 构建产物
 dist/
+src-tauri/target/
 *.o
 
 # Go工作空间文件

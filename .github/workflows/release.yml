@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v3.0.0. Defaults to package.json version."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build wuhu.exe
+        run: npm run tauri -- build --no-bundle
+
+      - name: Package wuhu.zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact\wuhu | Out-Null
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item src-tauri\target\release\wuhu.exe artifact\wuhu\wuhu.exe -Force
+          Compress-Archive -Path artifact\* -DestinationPath release\wuhu.zip -Force
+
+      - name: Verify package layout
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("release\wuhu.zip")
+          try {
+            $entries = $zip.Entries | ForEach-Object { $_.FullName }
+            if ($entries -notcontains "wuhu/wuhu.exe") {
+              throw "wuhu.zip must contain wuhu/wuhu.exe. Actual entries: $($entries -join ', ')"
+            }
+            if ($entries -contains "wuhu/wuhu/wuhu.exe") {
+              throw "wuhu.zip contains duplicated folder nesting: wuhu/wuhu/wuhu.exe"
+            }
+          } finally {
+            $zip.Dispose()
+          }
+
+      - name: Resolve release tag
+        shell: pwsh
+        run: |
+          $manualTag = "${{ inputs.tag }}"
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tag = $env:GITHUB_REF_NAME
+          } elseif ($manualTag) {
+            $tag = $manualTag
+          } else {
+            $version = node -p "require('./package.json').version"
+            $tag = "v$version"
+          }
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag release\wuhu.zip --clobber
+          } else {
+            gh release create $tag release\wuhu.zip --target $env:GITHUB_SHA --title $tag --notes "Windows x64 build."
+          }
