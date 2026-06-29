@@ -12,6 +12,8 @@ use zip::ZipArchive;
 
 const DLL_NAMES: [&str; 3] = ["dwmapi.dll", "xinput1_4.dll", "OpenSteamTool.dll"];
 const STORE_FILE: &str = "state.json";
+const HTTP_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15";
 
 struct EmbeddedToolFile {
     name: &'static str,
@@ -64,6 +66,8 @@ struct PackageItem {
     manifest_updated_at: Option<String>,
     #[serde(default)]
     manifest_file_size: Option<u64>,
+    #[serde(default)]
+    image_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,7 +206,7 @@ fn import_package_from_bytes(
     let bytes = general_purpose::STANDARD
         .decode(data_base64)
         .map_err(|err| format!("zip 数据解码失败：{err}"))?;
-    import_package_archive(&app, file_name, bytes, None, None, None)
+    import_package_archive(&app, file_name, bytes, None, None, None, None)
 }
 
 #[tauri::command]
@@ -239,6 +243,7 @@ async fn add_hubcap_manifest(
     app: AppHandle,
     app_id: u32,
     title: String,
+    image_url: Option<String>,
 ) -> Result<AppState, String> {
     if app_id == 0 {
         return Err("AppID 无效".to_string());
@@ -274,11 +279,13 @@ async fn add_hubcap_manifest(
         .map_err(|err| format!("读取清单失败：{err}"))?
         .to_vec();
     let title = normalize_title(&title, app_id);
+    let image_url = normalize_optional_text(image_url);
     import_package_archive(
         &app,
         format!("{app_id}.zip"),
         bytes,
         Some(title),
+        image_url,
         status.file_modified,
         status.file_size,
     )
@@ -289,6 +296,7 @@ fn import_package_archive(
     file_name: String,
     bytes: Vec<u8>,
     fallback_title: Option<String>,
+    image_url: Option<String>,
     manifest_updated_at: Option<String>,
     manifest_file_size: Option<u64>,
 ) -> Result<AppState, String> {
@@ -316,9 +324,7 @@ fn import_package_archive(
         .unwrap_or("package");
     let mut metadata = parse_package_metadata(&lua_file_name, &lua_content, zip_stem);
     if let Some(title) = fallback_title {
-        if metadata.title == metadata.id || metadata.title.trim().is_empty() {
-            metadata.title = title;
-        }
+        metadata.title = title;
     }
     let package_id = sanitize_id(&metadata.id);
     if package_id.is_empty() {
@@ -371,6 +377,7 @@ fn import_package_archive(
         imported_at: now_seconds(),
         manifest_updated_at,
         manifest_file_size,
+        image_url,
     };
     let package_to_sync = record.clone();
 
@@ -414,6 +421,7 @@ fn add_steam_game(app: AppHandle, app_id: u32, title: String) -> Result<AppState
         imported_at: now_seconds(),
         manifest_updated_at: None,
         manifest_file_size: None,
+        image_url: None,
     };
     let package_to_sync = record.clone();
 
@@ -532,7 +540,7 @@ async fn search_steam_games(query: String) -> Result<Vec<SteamSearchItem>, Strin
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
-        .user_agent("wuhu/3.0.0")
+        .user_agent(HTTP_USER_AGENT)
         .build()
         .map_err(|err| format!("创建 Steam 搜索请求失败：{err}"))?;
     let response = client
@@ -561,7 +569,7 @@ async fn search_steam_games(query: String) -> Result<Vec<SteamSearchItem>, Strin
 fn hubcap_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent("wuhu/3.0.0")
+        .user_agent(HTTP_USER_AGENT)
         .build()
         .map_err(|err| format!("创建清单请求失败：{err}"))
 }
@@ -1197,6 +1205,17 @@ fn normalize_title(title: &str, app_id: u32) -> String {
     } else {
         title
     }
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let text = text.trim();
+        if text.is_empty() {
+            None
+        } else {
+            Some(text.to_string())
+        }
+    })
 }
 
 fn build_basic_lua(app_id: u32, title: &str) -> String {

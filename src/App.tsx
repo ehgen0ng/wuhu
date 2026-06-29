@@ -125,6 +125,66 @@ function searchResultBadge(item: SteamSearchResult) {
   return "Steam";
 }
 
+function steamHeaderImage(appId: number | null | undefined) {
+  if (!appId) return null;
+  return `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
+}
+
+function shouldUseSteamTitle(pkg: PackageItem, steamTitle: string) {
+  const current = pkg.title.trim();
+  if (!steamTitle.trim() || current === steamTitle) return false;
+  if (!current || current === pkg.id || current === String(pkg.appId ?? "")) return true;
+  return /^[\x00-\x7F]+$/.test(current);
+}
+
+function CardImage({ primary, fallback }: { primary: string | null; fallback?: string | null }) {
+  if (!primary && !fallback) return null;
+  return (
+    <img
+      src={primary || fallback || ""}
+      alt=""
+      onError={(event) => {
+        const backup = fallback?.trim();
+        if (backup && event.currentTarget.src !== backup) {
+          event.currentTarget.src = backup;
+          return;
+        }
+        event.currentTarget.remove();
+      }}
+    />
+  );
+}
+
+function needsSteamMetadata(pkg: PackageItem) {
+  if (!pkg.appId) return false;
+  return /^[\x00-\x7F]+$/.test(pkg.title.trim());
+}
+
+async function enrichPackageMetadata(state: AppState): Promise<AppState> {
+  if (!state.packages.some(needsSteamMetadata)) return state;
+
+  const packages = await Promise.all(
+    state.packages.map(async (pkg) => {
+      if (!needsSteamMetadata(pkg) || !pkg.appId) return pkg;
+
+      try {
+        const results = await searchSteamStore(pkg.appId.toString());
+        const match = results.find((item) => item.id === pkg.appId);
+        if (!match) return pkg;
+
+        return {
+          ...pkg,
+          title: shouldUseSteamTitle(pkg, match.name) ? match.name : pkg.title,
+        };
+      } catch {
+        return pkg;
+      }
+    }),
+  );
+
+  return { ...state, packages };
+}
+
 function formatManifestTime(value: string | null | undefined) {
   if (!value) return "未知";
   const date = new Date(value);
@@ -234,6 +294,7 @@ function packageFromSearchResult(item: SteamSearchResult): PackageItem {
     importedAt: Math.floor(Date.now() / 1000),
     manifestUpdatedAt: null,
     manifestFileSize: null,
+    imageUrl: item.tinyImage,
   };
 }
 
@@ -272,20 +333,22 @@ export default function App() {
 
   const packages = state?.packages ?? [];
 
+  async function applyAppState(nextState: AppState) {
+    const enrichedState = await enrichPackageMetadata(nextState);
+    setState(enrichedState);
+    setSteamPathInput(enrichedState.settings.steamPath ?? "");
+    setHubcapKeyInput(enrichedState.settings.hubcapApiKey ?? "");
+  }
+
   useEffect(() => {
     if (!isTauriRuntime()) {
       const nextState = fallbackState(null);
-      setState(nextState);
-      setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
+      void applyAppState(nextState);
       return;
     }
 
     call<AppState>("get_initial_state")
-      .then((nextState) => {
-        setState(nextState);
-        setSteamPathInput(nextState.settings.steamPath ?? "");
-        setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
-      })
+      .then((nextState) => applyAppState(nextState))
       .catch((error) => setNotice({ page: "packages", text: String(error) }));
   }, []);
 
@@ -294,14 +357,19 @@ export default function App() {
     setNotice(null);
   }
 
+  function clearSearchState() {
+    setSearchTerm("");
+    setSearchResults([]);
+    setHasSearched(false);
+  }
+
   async function refreshState() {
     try {
       setBusy("refresh");
       setNotice(null);
+      clearSearchState();
       const nextState = await call<AppState>("get_initial_state");
-      setState(nextState);
-      setSteamPathInput(nextState.settings.steamPath ?? "");
-      setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
+      await applyAppState(nextState);
     } catch (error) {
       setNotice({ page: "packages", text: String(error) });
     } finally {
@@ -320,9 +388,7 @@ export default function App() {
       setNotice(null);
       const nextState = await action();
       if (nextState) {
-        setState(nextState);
-        setSteamPathInput(nextState.settings.steamPath ?? "");
-        setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
+        await applyAppState(nextState);
       }
       if (success) {
         setNotice({ page: noticePage, text: success });
@@ -424,9 +490,9 @@ export default function App() {
         const nextState = await call<AppState>("add_hubcap_manifest", {
           appId: item.id,
           title: item.name,
+          imageUrl: item.tinyImage,
         });
-        setState(nextState);
-        setSteamPathInput(nextState.settings.steamPath ?? "");
+        await applyAppState(nextState);
       } else {
         setState((previous) => {
           const base = fallbackState(previous);
@@ -633,7 +699,7 @@ export default function App() {
                     return (
                       <article className="package-card search-card" key={item.id}>
                         <div className={`card-art card-art-${index % 4}`}>
-                          {item.tinyImage && <img src={item.tinyImage} alt="" />}
+                          <CardImage primary={steamHeaderImage(item.id)} fallback={item.tinyImage} />
                           <span>{searchResultBadge(item)}</span>
                         </div>
                         <div className="card-body">
@@ -669,43 +735,46 @@ export default function App() {
             )}
 
             <div className="package-grid">
-              {packages.map((pkg, index) => (
-                <article className="package-card" key={pkg.id}>
-                  <div className={`card-art card-art-${index % 4}`}>
-                    <span>{pkg.enabled ? "已启用" : "已禁用"}</span>
-                  </div>
-                  <div className="card-body">
-                    <div className="card-main">
-                      <h2>{pkg.title}</h2>
-                      <p>{packageSubtitle(pkg)}</p>
-                      {pkg.manifestUpdatedAt && (
-                        <div className="manifest-meta">
-                          清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
-                        </div>
-                      )}
+              {packages.map((pkg, index) => {
+                return (
+                  <article className="package-card" key={pkg.id}>
+                    <div className={`card-art card-art-${index % 4}`}>
+                      <CardImage primary={steamHeaderImage(pkg.appId)} fallback={pkg.imageUrl} />
+                      <span>{pkg.enabled ? "已启用" : "已禁用"}</span>
                     </div>
+                    <div className="card-body">
+                      <div className="card-main">
+                        <h2>{pkg.title}</h2>
+                        <p>{packageSubtitle(pkg)}</p>
+                        {pkg.manifestUpdatedAt && (
+                          <div className="manifest-meta">
+                            清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
+                          </div>
+                        )}
+                      </div>
 
-                    <div className="card-actions">
-                      <Switch
-                        checked={pkg.enabled}
-                        disabled={Boolean(busy)}
-                        title={pkg.enabled ? "禁用" : "启用"}
-                        ariaLabel={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
-                        onChange={(enabled) => togglePackage(pkg, enabled)}
-                      />
-                      <button
-                        className="icon-button danger"
-                        aria-label={`删除 ${pkg.title}`}
-                        title="删除"
-                        onClick={() => deletePackage(pkg)}
-                        disabled={Boolean(busy)}
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                      <div className="card-actions">
+                        <Switch
+                          checked={pkg.enabled}
+                          disabled={Boolean(busy)}
+                          title={pkg.enabled ? "禁用" : "启用"}
+                          ariaLabel={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
+                          onChange={(enabled) => togglePackage(pkg, enabled)}
+                        />
+                        <button
+                          className="icon-button danger"
+                          aria-label={`删除 ${pkg.title}`}
+                          title="删除"
+                          onClick={() => deletePackage(pkg)}
+                          disabled={Boolean(busy)}
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
 
             {!packages.length && (

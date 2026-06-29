@@ -9,6 +9,7 @@ export type PackageItem = {
   importedAt: number;
   manifestUpdatedAt?: string | null;
   manifestFileSize?: number | null;
+  imageUrl?: string | null;
 };
 
 export type AppSettings = {
