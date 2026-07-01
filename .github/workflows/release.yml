@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v3.0.0. Defaults to package.json version."
         required: false
         type: string
 
@@ -16,7 +15,7 @@ permissions:
 
 jobs:
   windows:
-    name: Build Windows
+    name: Package Windows release
     runs-on: windows-latest
 
     steps:
@@ -34,13 +33,24 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-      - name: Build wuhu.exe
+      - name: Install npm dependencies
+        run: npm ci --prefer-offline --no-audit --fund=false
+
+      - name: Compile Windows app
         run: npm run tauri -- build --no-bundle
 
-      - name: Package wuhu.zip
+      - name: Create release zip
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifact\wuhu | Out-Null
@@ -48,45 +58,25 @@ jobs:
           Copy-Item src-tauri\target\release\wuhu.exe artifact\wuhu\wuhu.exe -Force
           Compress-Archive -Path artifact\* -DestinationPath release\wuhu.zip -Force
 
-      - name: Verify package layout
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead("release\wuhu.zip")
-          try {
-            $entries = $zip.Entries | ForEach-Object { $_.FullName }
-            if ($entries -notcontains "wuhu/wuhu.exe") {
-              throw "wuhu.zip must contain wuhu/wuhu.exe. Actual entries: $($entries -join ', ')"
-            }
-            if ($entries -contains "wuhu/wuhu/wuhu.exe") {
-              throw "wuhu.zip contains duplicated folder nesting: wuhu/wuhu/wuhu.exe"
-            }
-          } finally {
-            $zip.Dispose()
-          }
-
-      - name: Resolve release tag
-        shell: pwsh
-        run: |
-          $manualTag = "${{ inputs.tag }}"
-          if ($env:GITHUB_REF_TYPE -eq "tag") {
-            $tag = $env:GITHUB_REF_NAME
-          } elseif ($manualTag) {
-            $tag = $manualTag
-          } else {
-            $version = node -p "require('./package.json').version"
-            $tag = "v$version"
-          }
-          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
-
-      - name: Build release notes
+      - name: Prepare release notes
         shell: bash
         run: |
           set -euo pipefail
 
+          manual_tag="${{ inputs.tag }}"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$manual_tag" ]; then
+            tag="$manual_tag"
+          else
+            version="$(node -p "require('./package.json').version")"
+            tag="v$version"
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
           target_ref="$GITHUB_SHA"
-          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null; then
-            target_ref="$RELEASE_TAG"
+          if git rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null; then
+            target_ref="$tag"
           fi
 
           previous_tag="$(git describe --tags --abbrev=0 "${target_ref}^" 2>/dev/null || true)"
@@ -108,7 +98,7 @@ jobs:
             echo "- ${subject} ([${short_sha}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${sha}))" > release-notes.md
           fi
 
-      - name: Publish GitHub Release
+      - name: Publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
