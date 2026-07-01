@@ -18,6 +18,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import appPackage from "../package.json";
 import appIcon from "./assets/icon.png";
 import { Switch } from "./Switch";
 import type {
@@ -36,6 +37,8 @@ type Notice = {
   text: string;
   kind?: NoticeKind;
 };
+
+const APP_VERSION = appPackage.version;
 
 type RawSteamSearchItem = {
   type?: string;
@@ -77,7 +80,30 @@ function packageSubtitle(pkg: PackageItem) {
 }
 
 function isTauriRuntime() {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+}
+
+function waitForTauriRuntime(timeoutMs = 2500) {
+  return new Promise<boolean>((resolve) => {
+    if (isTauriRuntime()) {
+      resolve(true);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (isTauriRuntime()) {
+        window.clearInterval(timer);
+        resolve(true);
+        return;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        window.clearInterval(timer);
+        resolve(false);
+      }
+    }, 50);
+  });
 }
 
 function normalizeSteamSearchItem(item: RawSteamSearchItem): SteamSearchResult | null {
@@ -96,25 +122,8 @@ function normalizeSteamSearchItem(item: RawSteamSearchItem): SteamSearchResult |
 }
 
 async function searchSteamStore(query: string): Promise<SteamSearchResult[]> {
-  if (isTauriRuntime()) {
-    const items = await call<RawSteamSearchItem[]>("search_steam_games", { query });
-    return items.map(normalizeSteamSearchItem).filter((item): item is SteamSearchResult => Boolean(item));
-  }
-
-  const url = new URL("/steam-api/api/storesearch/", window.location.origin);
-  url.searchParams.set("term", query);
-  url.searchParams.set("l", "schinese");
-  url.searchParams.set("cc", "cn");
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Steam 搜索失败：HTTP ${response.status}`);
-  }
-
-  const data = (await response.json()) as { items?: RawSteamSearchItem[] };
-  return (data.items ?? [])
-    .map(normalizeSteamSearchItem)
-    .filter((item): item is SteamSearchResult => Boolean(item));
+  const items = await call<RawSteamSearchItem[]>("search_steam_games", { query });
+  return items.map(normalizeSteamSearchItem).filter((item): item is SteamSearchResult => Boolean(item));
 }
 
 function formatSteamPrice(price: SteamSearchPrice | null) {
@@ -269,42 +278,6 @@ function normalizeHubcapStatus(appId: number, raw: Record<string, unknown>): Hub
   };
 }
 
-async function fetchHubcapStatusInBrowser(appId: number, apiKey: string): Promise<HubcapManifestStatus> {
-  const response = await fetch(`/hubcap-api/api/v1/status/${appId}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  const text = await response.text();
-  const raw = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-
-  if (!response.ok) {
-    return {
-      appId,
-      gameName: null,
-      status: String(response.status),
-      available: false,
-      manifestFileExists: false,
-      updateInProgress: null,
-      needsUpdate: null,
-      fileSize: null,
-      fileModified: null,
-      error: typeof raw.detail === "string" ? raw.detail : null,
-    };
-  }
-
-  return normalizeHubcapStatus(appId, raw);
-}
-
-function fallbackState(previous: AppState | null): AppState {
-  return (
-    previous ?? {
-      settings: { steamPath: null, hubcapApiKey: null },
-      packages: [],
-      installStatus: { installed: false },
-      steamClient: { version: null, clientBuildDate: null, locked: false },
-    }
-  );
-}
-
 function NoticeBanner({ notice }: { notice: Notice }) {
   const kind = notice.kind ?? "info";
   const Icon = kind === "error" || kind === "warning" ? AlertTriangle : kind === "success" ? CheckCircle2 : Info;
@@ -321,22 +294,6 @@ function NoticeBanner({ notice }: { notice: Notice }) {
   );
 }
 
-function packageFromSearchResult(item: SteamSearchResult): PackageItem {
-  return {
-    id: item.id.toString(),
-    title: item.name,
-    appId: item.id,
-    luaFileName: `wuhu_${item.id}.lua`,
-    manifestFiles: [],
-    sourceZipName: "Steam 搜索",
-    enabled: true,
-    importedAt: Math.floor(Date.now() / 1000),
-    manifestUpdatedAt: null,
-    manifestFileSize: null,
-    imageUrl: item.tinyImage,
-  };
-}
-
 function formatSteamVersion(version: string | null | undefined) {
   if (!version) return "未识别";
   return version;
@@ -344,18 +301,23 @@ function formatSteamVersion(version: string | null | undefined) {
 
 function formatSteamBuildDate(seconds: number | null | undefined) {
   if (!seconds) return "未识别";
-  const utcMinusEight = new Date((seconds - 8 * 60 * 60) * 1000);
-  if (Number.isNaN(utcMinusEight.getTime())) return "未识别";
+  const buildDate = new Date(seconds * 1000);
+  if (Number.isNaN(buildDate.getTime())) return "未识别";
 
   const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-  const year = utcMinusEight.getUTCFullYear();
-  const month = utcMinusEight.getUTCMonth() + 1;
-  const day = utcMinusEight.getUTCDate();
-  const weekday = weekdays[utcMinusEight.getUTCDay()];
-  const hour = utcMinusEight.getUTCHours();
-  const minute = String(utcMinusEight.getUTCMinutes()).padStart(2, "0");
+  const year = buildDate.getFullYear();
+  const month = buildDate.getMonth() + 1;
+  const day = buildDate.getDate();
+  const weekday = weekdays[buildDate.getDay()];
+  const hour = buildDate.getHours();
+  const minute = String(buildDate.getMinutes()).padStart(2, "0");
+  const offsetMinutes = -buildDate.getTimezoneOffset();
+  const offsetSign = offsetMinutes >= 0 ? "+" : "-";
+  const offsetAbsolute = Math.abs(offsetMinutes);
+  const offsetHour = String(Math.floor(offsetAbsolute / 60)).padStart(2, "0");
+  const offsetMinute = String(offsetAbsolute % 60).padStart(2, "0");
 
-  return `${year}年${month}月${day}日${weekday} ${hour}:${minute} UTC-08:00`;
+  return `${year}年${month}月${day}日${weekday} ${hour}:${minute} UTC${offsetSign}${offsetHour}:${offsetMinute}`;
 }
 
 export default function App() {
@@ -369,26 +331,52 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const stateApplyVersion = useRef(0);
 
   const packages = state?.packages ?? [];
+  const hasLoadedState = state !== null;
 
   async function applyAppState(nextState: AppState) {
+    const applyVersion = stateApplyVersion.current + 1;
+    stateApplyVersion.current = applyVersion;
+    setState(nextState);
+    setSteamPathInput(nextState.settings.steamPath ?? "");
+    setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
+
     const enrichedState = await enrichPackageMetadata(nextState);
+    if (stateApplyVersion.current !== applyVersion) return;
     setState(enrichedState);
     setSteamPathInput(enrichedState.settings.steamPath ?? "");
     setHubcapKeyInput(enrichedState.settings.hubcapApiKey ?? "");
   }
 
   useEffect(() => {
-    if (!isTauriRuntime()) {
-      const nextState = fallbackState(null);
-      void applyAppState(nextState);
-      return;
+    let cancelled = false;
+
+    async function loadInitialState() {
+      const hasTauriRuntime = await waitForTauriRuntime();
+      if (cancelled) return;
+
+      if (!hasTauriRuntime) {
+        console.warn("[wuhu] Tauri runtime was not detected before get_initial_state.");
+      }
+
+      try {
+        const nextState = await call<AppState>("get_initial_state");
+        if (!cancelled) {
+          await applyAppState(nextState);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error("[wuhu] get_initial_state failed", error);
+        setNotice({ page: "packages", text: String(error), kind: "error" });
+      }
     }
 
-    call<AppState>("get_initial_state")
-      .then((nextState) => applyAppState(nextState))
-      .catch((error) => setNotice({ page: "packages", text: String(error), kind: "error" }));
+    void loadInitialState();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function switchPage(nextPage: Page) {
@@ -501,16 +489,6 @@ export default function App() {
       return results.map((item) => ({ ...item, manifestChecked: false, manifestStatus: null }));
     }
 
-    if (!isTauriRuntime()) {
-      const statuses = await Promise.all(results.map((item) => fetchHubcapStatusInBrowser(item.id, apiKey)));
-      const byAppId = new Map(statuses.map((status) => [status.appId, status]));
-      return results.map((item) => ({
-        ...item,
-        manifestChecked: true,
-        manifestStatus: byAppId.get(item.id) ?? null,
-      }));
-    }
-
     const statuses = await call<HubcapManifestStatus[]>("check_hubcap_manifest_statuses", {
       appIds: results.map((item) => item.id),
     });
@@ -534,25 +512,12 @@ export default function App() {
 
       await waitForNextPaint();
 
-      if (isTauriRuntime()) {
-        const nextState = await call<AppState>("add_hubcap_manifest", {
-          appId: item.id,
-          title: item.name,
-          imageUrl: item.tinyImage,
-        });
-        await applyAppState(nextState);
-      } else {
-        setState((previous) => {
-          const base = fallbackState(previous);
-          const nextPackage = packageFromSearchResult(item);
-          const packages = base.packages
-            .filter((pkg) => pkg.id !== nextPackage.id)
-            .concat(nextPackage)
-            .sort((left, right) => left.title.localeCompare(right.title, "zh-Hans-CN"));
-
-          return { ...base, packages };
-        });
-      }
+      const nextState = await call<AppState>("add_hubcap_manifest", {
+        appId: item.id,
+        title: item.name,
+        imageUrl: item.tinyImage,
+      });
+      await applyAppState(nextState);
 
       setNotice({ page: "packages", text: `已添加 ${item.name}。`, kind: "success" });
     } catch (error) {
@@ -589,17 +554,6 @@ export default function App() {
   }
 
   async function saveHubcapKey() {
-    if (!isTauriRuntime()) {
-      const apiKey = hubcapKeyInput.trim();
-      const base = fallbackState(state);
-      setState({
-        ...base,
-        settings: { ...base.settings, hubcapApiKey: apiKey || null },
-      });
-      setNotice({ page: "settings", text: "Hubcap Key 已保存。", kind: "success" });
-      return;
-    }
-
     await runAction(
       "hubcap-key",
       "settings",
@@ -687,7 +641,7 @@ export default function App() {
 
         <div className="sidebar-footer">
           <div className={state?.installStatus.installed ? "status-dot good" : "status-dot"} />
-          <span>{state?.installStatus.installed ? "组件已安装" : "等待安装组件"}</span>
+          <span>{hasLoadedState ? (state.installStatus.installed ? "组件已安装" : "等待安装组件") : "状态未读取"}</span>
         </div>
       </aside>
 
@@ -846,7 +800,7 @@ export default function App() {
               </section>
             )}
 
-            {!packages.length && searchResults.length === 0 && (
+            {hasLoadedState && !packages.length && searchResults.length === 0 && (
               <div className="empty-state">
                 <Upload size={34} />
                 <h2>还没有清单</h2>
@@ -997,6 +951,22 @@ export default function App() {
                     ariaLabel={state?.steamClient.locked ? "取消锁定 Steam 客户端版本" : "锁定 Steam 客户端版本"}
                     onChange={toggleSteamClientLock}
                   />
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-panel">
+              <div className="panel-title">
+                <Info size={20} />
+                <div>
+                  <h2>当前版本</h2>
+                </div>
+              </div>
+
+              <div className="install-grid">
+                <div className="install-card">
+                  <span>wuhu</span>
+                  <strong>v{APP_VERSION}</strong>
                 </div>
               </div>
             </div>
