@@ -2,9 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
+  AlertTriangle,
   CheckCircle2,
   FolderCog,
   FolderOpen,
+  Info,
   KeyRound,
   LockKeyhole,
   PackagePlus,
@@ -28,9 +30,11 @@ import type {
 } from "./types";
 
 type Page = "packages" | "settings";
+type NoticeKind = "info" | "success" | "warning" | "error";
 type Notice = {
   page: Page;
   text: string;
+  kind?: NoticeKind;
 };
 
 type RawSteamSearchItem = {
@@ -46,6 +50,12 @@ type RawSteamSearchItem = {
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(command, args);
+}
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -214,6 +224,19 @@ function manifestStatusText(item: SteamSearchResult) {
   return `清单更新：${formatManifestTime(status.fileModified)}${size ? ` · ${size}` : ""}`;
 }
 
+function manifestIssueText(item: SteamSearchResult) {
+  if (canAddManifest(item)) return null;
+  if (!item.manifestChecked) return "未检查清单：请先保存 Hubcap Key。";
+
+  const status = item.manifestStatus;
+  if (!status) return "清单状态未知，请稍后重试。";
+  if (status.error) return status.error;
+  if (status.updateInProgress) return "清单正在更新，稍后再试。";
+  if (!status.manifestFileExists) return "暂未找到可用清单。";
+  if (status.status) return `清单状态：${status.status}`;
+  return "当前没有可用清单。";
+}
+
 function canAddManifest(item: SteamSearchResult) {
   const status = item.manifestStatus;
   return Boolean(
@@ -279,6 +302,22 @@ function fallbackState(previous: AppState | null): AppState {
       installStatus: { installed: false },
       steamClient: { version: null, clientBuildDate: null, locked: false },
     }
+  );
+}
+
+function NoticeBanner({ notice }: { notice: Notice }) {
+  const kind = notice.kind ?? "info";
+  const Icon = kind === "error" || kind === "warning" ? AlertTriangle : kind === "success" ? CheckCircle2 : Info;
+
+  return (
+    <div
+      className={`notice ${kind}`}
+      role={kind === "error" ? "alert" : "status"}
+      aria-live={kind === "error" ? "assertive" : "polite"}
+    >
+      <Icon size={17} />
+      <span>{notice.text}</span>
+    </div>
   );
 }
 
@@ -349,7 +388,7 @@ export default function App() {
 
     call<AppState>("get_initial_state")
       .then((nextState) => applyAppState(nextState))
-      .catch((error) => setNotice({ page: "packages", text: String(error) }));
+      .catch((error) => setNotice({ page: "packages", text: String(error), kind: "error" }));
   }, []);
 
   function switchPage(nextPage: Page) {
@@ -371,7 +410,7 @@ export default function App() {
       const nextState = await call<AppState>("get_initial_state");
       await applyAppState(nextState);
     } catch (error) {
-      setNotice({ page: "packages", text: String(error) });
+      setNotice({ page: "packages", text: String(error), kind: "error" });
     } finally {
       setBusy(null);
     }
@@ -382,19 +421,25 @@ export default function App() {
     noticePage: Page,
     action: () => Promise<AppState | void>,
     success?: string,
+    pending?: string,
   ) {
     try {
       setBusy(label);
-      setNotice(null);
+      if (pending) {
+        setNotice({ page: noticePage, text: pending, kind: "info" });
+        await waitForNextPaint();
+      } else {
+        setNotice(null);
+      }
       const nextState = await action();
       if (nextState) {
         await applyAppState(nextState);
       }
       if (success) {
-        setNotice({ page: noticePage, text: success });
+        setNotice({ page: noticePage, text: success, kind: "success" });
       }
     } catch (error) {
-      setNotice({ page: noticePage, text: String(error) });
+      setNotice({ page: noticePage, text: String(error), kind: "error" });
     } finally {
       setBusy(null);
     }
@@ -416,6 +461,7 @@ export default function App() {
         });
       },
       "已导入清单。",
+      "正在导入清单，请稍候。",
     );
   }
 
@@ -423,7 +469,7 @@ export default function App() {
     event.preventDefault();
     const query = searchTerm.trim();
     if (!query) {
-      setNotice({ page: "packages", text: "请输入游戏名称。" });
+      setNotice({ page: "packages", text: "请输入游戏名称。", kind: "warning" });
       return;
     }
 
@@ -436,11 +482,11 @@ export default function App() {
       const resultsWithStatuses = await attachHubcapStatuses(results);
       setSearchResults(resultsWithStatuses);
       if (!results.length) {
-        setNotice({ page: "packages", text: "没有搜索结果。" });
+        setNotice({ page: "packages", text: "没有搜索结果。", kind: "info" });
       }
     } catch (error) {
       setSearchResults([]);
-      setNotice({ page: "packages", text: String(error) });
+      setNotice({ page: "packages", text: String(error), kind: "error" });
     } finally {
       setBusy(null);
     }
@@ -451,7 +497,7 @@ export default function App() {
 
     const apiKey = state?.settings.hubcapApiKey?.trim() || hubcapKeyInput.trim();
     if (!apiKey) {
-      setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。" });
+      setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。", kind: "warning" });
       return results.map((item) => ({ ...item, manifestChecked: false, manifestStatus: null }));
     }
 
@@ -480,11 +526,13 @@ export default function App() {
     const label = `add-hubcap-${item.id}`;
     try {
       setBusy(label);
-      setNotice(null);
+      setNotice({ page: "packages", text: `正在添加 ${item.name}，请稍候。`, kind: "info" });
 
       if (!canAddManifest(item)) {
         throw new Error("当前没有可用清单。");
       }
+
+      await waitForNextPaint();
 
       if (isTauriRuntime()) {
         const nextState = await call<AppState>("add_hubcap_manifest", {
@@ -506,9 +554,9 @@ export default function App() {
         });
       }
 
-      setNotice({ page: "packages", text: `已添加 ${item.name}。` });
+      setNotice({ page: "packages", text: `已添加 ${item.name}。`, kind: "success" });
     } catch (error) {
-      setNotice({ page: "packages", text: String(error) });
+      setNotice({ page: "packages", text: String(error), kind: "error" });
     } finally {
       setBusy(null);
     }
@@ -548,7 +596,7 @@ export default function App() {
         ...base,
         settings: { ...base.settings, hubcapApiKey: apiKey || null },
       });
-      setNotice({ page: "settings", text: "Hubcap Key 已保存。" });
+      setNotice({ page: "settings", text: "Hubcap Key 已保存。", kind: "success" });
       return;
     }
 
@@ -592,7 +640,7 @@ export default function App() {
         "Steam 路径已保存，请重新启用需要的清单。",
       );
     } catch (error) {
-      setNotice({ page: "settings", text: String(error) });
+      setNotice({ page: "settings", text: String(error), kind: "error" });
     }
   }
 
@@ -608,6 +656,7 @@ export default function App() {
   const hasSteamPath = Boolean(state?.settings.steamPath);
   const isRefreshing = busy === "refresh";
   const isSearching = busy === "steam-search";
+  const isImporting = busy === "import";
 
   return (
     <div className="app-shell">
@@ -659,14 +708,16 @@ export default function App() {
                   onClick={() => fileInput.current?.click()}
                   disabled={Boolean(busy)}
                 >
-                  <PackagePlus size={18} />
-                  添加游戏
+                  {isImporting ? <RefreshCcw className="spin" size={18} /> : <PackagePlus size={18} />}
+                  {isImporting ? "导入中" : "导入清单"}
                 </button>
                 <input ref={fileInput} type="file" accept=".zip" hidden onChange={handleImport} />
               </div>
             </header>
 
-            {notice?.page === "packages" && <div className="notice">{notice.text}</div>}
+            {notice?.page === "packages" && (
+              <NoticeBanner notice={notice} />
+            )}
 
             <form className="search-panel" onSubmit={searchSteamGames}>
               <div className="search-row">
@@ -695,7 +746,9 @@ export default function App() {
                       (pkg) => pkg.appId === item.id || pkg.id === item.id.toString(),
                     );
                     const canAdd = canAddManifest(item);
+                    const isAdding = busy === `add-hubcap-${item.id}`;
                     const manifestText = manifestStatusText(item);
+                    const manifestIssue = manifestIssueText(item);
                     return (
                       <article className="package-card search-card" key={item.id}>
                         <div className={`card-art card-art-${index % 4}`}>
@@ -707,6 +760,7 @@ export default function App() {
                             <h2>{item.name}</h2>
                             <p>{searchResultSubtitle(item)}</p>
                             {manifestText && <div className="manifest-meta good">{manifestText}</div>}
+                            {manifestIssue && <div className="manifest-meta warning">{manifestIssue}</div>}
                             {existingPackage?.manifestUpdatedAt && (
                               <div className="manifest-meta">
                                 已添加：{formatManifestTime(existingPackage.manifestUpdatedAt)}
@@ -720,9 +774,16 @@ export default function App() {
                                 className="ghost-button add-card-button"
                                 onClick={() => addSearchResult(item)}
                                 disabled={Boolean(busy)}
+                                aria-busy={isAdding}
                               >
-                                <PackagePlus size={17} />
-                                {existingPackage ? "重新添加" : "添加"}
+                                {isAdding ? <RefreshCcw className="spin" size={17} /> : <PackagePlus size={17} />}
+                                {isAdding ? "添加中" : existingPackage ? "重新添加" : "添加"}
+                              </button>
+                            )}
+                            {!canAdd && (
+                              <button className="ghost-button add-card-button" disabled>
+                                <AlertTriangle size={17} />
+                                不可添加
                               </button>
                             )}
                           </div>
@@ -734,57 +795,61 @@ export default function App() {
               </section>
             )}
 
-            <div className="package-grid">
-              {packages.map((pkg, index) => {
-                return (
-                  <article className="package-card" key={pkg.id}>
-                    <div className={`card-art card-art-${index % 4}`}>
-                      <CardImage primary={steamHeaderImage(pkg.appId)} fallback={pkg.imageUrl} />
-                      <span>{pkg.enabled ? "已启用" : "已禁用"}</span>
-                    </div>
-                    <div className="card-body">
-                      <div className="card-main">
-                        <h2>{pkg.title}</h2>
-                        <p>{packageSubtitle(pkg)}</p>
-                        {pkg.manifestUpdatedAt && (
-                          <div className="manifest-meta">
-                            清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
+            {packages.length > 0 && (
+              <section className="saved-section">
+                <div className="section-heading">
+                  <h2>已保存清单</h2>
+                  <span>{packages.length} 个清单</span>
+                </div>
+                <div className="package-grid">
+                  {packages.map((pkg, index) => {
+                    return (
+                      <article className="package-card" key={pkg.id}>
+                        <div className={`card-art card-art-${index % 4}`}>
+                          <CardImage primary={steamHeaderImage(pkg.appId)} fallback={pkg.imageUrl} />
+                          <span>{pkg.enabled ? "已启用" : "已禁用"}</span>
+                        </div>
+                        <div className="card-body">
+                          <div className="card-main">
+                            <h2>{pkg.title}</h2>
+                            <p>{packageSubtitle(pkg)}</p>
+                            {pkg.manifestUpdatedAt && (
+                              <div className="manifest-meta">
+                                清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
 
-                      <div className="card-actions">
-                        <Switch
-                          checked={pkg.enabled}
-                          disabled={Boolean(busy)}
-                          title={pkg.enabled ? "禁用" : "启用"}
-                          ariaLabel={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
-                          onChange={(enabled) => togglePackage(pkg, enabled)}
-                        />
-                        <button
-                          className="icon-button danger"
-                          aria-label={`删除 ${pkg.title}`}
-                          title="删除"
-                          onClick={() => deletePackage(pkg)}
-                          disabled={Boolean(busy)}
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+                          <div className="card-actions">
+                            <Switch
+                              checked={pkg.enabled}
+                              disabled={Boolean(busy)}
+                              title={pkg.enabled ? "禁用" : "启用"}
+                              ariaLabel={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
+                              onChange={(enabled) => togglePackage(pkg, enabled)}
+                            />
+                            <button
+                              className="icon-button danger"
+                              aria-label={`删除 ${pkg.title}`}
+                              title="删除"
+                              onClick={() => deletePackage(pkg)}
+                              disabled={Boolean(busy)}
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
 
-            {!packages.length && (
+            {!packages.length && searchResults.length === 0 && (
               <div className="empty-state">
                 <Upload size={34} />
                 <h2>还没有清单</h2>
-                <button className="primary-button" onClick={() => fileInput.current?.click()}>
-                  <PackagePlus size={18} />
-                  添加游戏
-                </button>
               </div>
             )}
           </section>
@@ -796,7 +861,9 @@ export default function App() {
               </div>
             </header>
 
-            {notice?.page === "settings" && <div className="notice">{notice.text}</div>}
+            {notice?.page === "settings" && (
+              <NoticeBanner notice={notice} />
+            )}
 
             <div className="settings-panel">
               <div className="panel-title">

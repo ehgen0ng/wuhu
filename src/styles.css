@@ -219,6 +219,33 @@ button:disabled {
   color: #dff4ff;
   background: rgba(102, 192, 244, 0.1);
   margin-bottom: 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.45;
+}
+
+.notice svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.notice.success {
+  color: #dffbe7;
+  border-color: rgba(118, 212, 139, 0.36);
+  background: rgba(118, 212, 139, 0.12);
+}
+
+.notice.warning {
+  color: #ffe7ba;
+  border-color: rgba(232, 184, 92, 0.38);
+  background: rgba(232, 184, 92, 0.12);
+}
+
+.notice.error {
+  color: #ffd6dc;
+  border-color: rgba(255, 122, 136, 0.42);
+  background: rgba(255, 122, 136, 0.13);
 }
 
 .search-panel {
@@ -248,6 +275,15 @@ button:disabled {
 
 .result-section {
   margin-bottom: 28px;
+}
+
+.saved-section {
+  margin-top: 30px;
+}
+
+.result-section + .saved-section {
+  border-top: 1px solid rgba(143, 188, 221, 0.12);
+  padding-top: 26px;
 }
 
 .section-heading {
@@ -538,6 +574,10 @@ button:disabled {
 
 .manifest-meta.good {
   color: #7cc7f0;
+}
+
+.manifest-meta.warning {
+  color: #e8b85c;
 }
 
 .choice-row {
