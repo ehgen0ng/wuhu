@@ -34,6 +34,16 @@ export type AppState = {
   steamClient: SteamClientStatus;
 };
 
+export type Page = "packages" | "settings";
+
+export type NoticeKind = "info" | "success" | "warning" | "error";
+
+export type Notice = {
+  page: Page;
+  text: string;
+  kind?: NoticeKind;
+};
+
 export type SteamSearchPrice = {
   currency: string;
   initial: number;
@@ -68,4 +78,9 @@ export type HubcapManifestStatus = {
   fileSize: number | null;
   fileModified: string | null;
   error: string | null;
+};
+
+export type HubcapQuota = {
+  dailyUsage: number;
+  dailyLimit: number;
 };

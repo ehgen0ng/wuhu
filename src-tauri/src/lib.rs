@@ -154,6 +154,13 @@ struct HubcapManifestStatus {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HubcapQuota {
+    daily_usage: u64,
+    daily_limit: u64,
+}
+
 #[tauri::command]
 fn get_initial_state(app: AppHandle) -> Result<AppState, String> {
     let mut store = load_store()?;
@@ -236,6 +243,14 @@ async fn check_hubcap_manifest_statuses(
     }
 
     Ok(statuses)
+}
+
+#[tauri::command]
+async fn get_hubcap_quota() -> Result<HubcapQuota, String> {
+    let store = load_store()?;
+    let api_key = hubcap_api_key(&store)?;
+    let client = hubcap_client()?;
+    fetch_hubcap_quota(&client, &api_key).await
 }
 
 #[tauri::command]
@@ -653,6 +668,44 @@ async fn fetch_hubcap_manifest_status(
     })
 }
 
+async fn fetch_hubcap_quota(client: &reqwest::Client, api_key: &str) -> Result<HubcapQuota, String> {
+    let response = client
+        .get("https://hubcapmanifest.com/api/v1/user/stats")
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|err| format!("读取 Hubcap 额度失败：{err}"))?;
+
+    let status_code = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取 Hubcap 额度失败：{err}"))?;
+
+    if status_code == reqwest::StatusCode::UNAUTHORIZED
+        || status_code == reqwest::StatusCode::FORBIDDEN
+    {
+        let detail = parse_hubcap_error_detail(&text);
+        return Err(format!("Key 无效或无权限{}", detail_prefix(&detail)));
+    }
+
+    if !status_code.is_success() {
+        let detail = parse_hubcap_error_detail(&text);
+        return Err(format!(
+            "读取 Hubcap 额度失败：HTTP {status_code}{}",
+            detail_prefix(&detail)
+        ));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("解析 Hubcap 额度失败：{err}"))?;
+
+    Ok(HubcapQuota {
+        daily_usage: value_as_u64(&json, "daily_usage").unwrap_or(0),
+        daily_limit: value_as_u64(&json, "daily_limit").unwrap_or(0),
+    })
+}
+
 async fn hubcap_error_detail(response: reqwest::Response) -> Option<String> {
     response
         .text()
@@ -721,6 +774,7 @@ pub fn run() {
             import_package_from_bytes,
             set_hubcap_api_key,
             check_hubcap_manifest_statuses,
+            get_hubcap_quota,
             add_hubcap_manifest,
             set_package_enabled,
             delete_package,

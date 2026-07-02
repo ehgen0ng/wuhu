@@ -3,11 +3,9 @@ node_modules/
 
 # 构建产物
 dist/
+src-tauri/gen/
 src-tauri/target/
 *.o
-
-# Go工作空间文件
-go.work
 
 # 系统文件
 .DS_Store
@@ -18,4 +16,4 @@ go.work
 .claude/
 
 # Steamworks SDK
-steamworks_sdk*/
+**/steamworks_sdk*/
