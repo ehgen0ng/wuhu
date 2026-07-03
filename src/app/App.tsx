@@ -214,7 +214,7 @@ export default function App() {
     label: string,
     noticePage: Page,
     action: () => Promise<AppState | void>,
-    success?: string,
+    success?: string | ((state: AppState | void) => string),
     pending?: string,
   ) {
     if (!beginAction(label)) return;
@@ -230,7 +230,8 @@ export default function App() {
         await applyAppState(nextState);
       }
       if (success) {
-        setNotice({ page: noticePage, text: success, kind: "success" });
+        const successText = typeof success === "function" ? success(nextState) : success;
+        setNotice({ page: noticePage, text: successText, kind: "success" });
       }
     } catch (error) {
       setNotice({ page: noticePage, text: String(error), kind: "error" });
@@ -252,7 +253,10 @@ export default function App() {
           dataBase64,
         });
       },
-      "已导入清单。",
+      (nextState) =>
+        nextState?.settings.steamPath
+          ? "已导入清单。"
+          : "已导入清单，已保存到本地；设置 Steam 路径后可启用。",
     );
     setPackageUpdateChecks({});
   }
@@ -323,7 +327,13 @@ export default function App() {
       await applyAppState(nextState);
       setPackageUpdateChecks({});
 
-      setNotice({ page: "packages", text: `已添加 ${item.name}。`, kind: "success" });
+      setNotice({
+        page: "packages",
+        text: nextState.settings.steamPath
+          ? `已添加 ${item.name}。`
+          : `已添加 ${item.name}，已保存到本地；设置 Steam 路径后可启用。`,
+        kind: "success",
+      });
     } catch (error) {
       setNotice({ page: "packages", text: String(error), kind: "error" });
     } finally {
@@ -345,6 +355,11 @@ export default function App() {
   }
 
   async function deletePackage(pkg: PackageItem) {
+    const confirmed = window.confirm(
+      `确定删除「${pkg.title}」吗？\n\n会删除本地 data 里的清单；已配置 Steam 路径时，也会移除 Steam 中启用的 Lua 和 manifest 副本。`,
+    );
+    if (!confirmed) return;
+
     await runAction(`delete-${pkg.id}`, "packages", () => call<AppState>("delete_package", { id: pkg.id }), "已删除清单。");
     setPackageUpdateChecks((current) => {
       const next = { ...current };
@@ -564,6 +579,7 @@ export default function App() {
           searchTerm={searchTerm}
           hasSearched={hasSearched}
           hasLoadedState={hasLoadedState}
+          hasSteamPath={Boolean(state?.settings.steamPath)}
           busy={busy}
           onRefresh={refreshState}
           onCheckPackageUpdates={checkPackageUpdates}

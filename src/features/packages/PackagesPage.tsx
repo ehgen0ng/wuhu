@@ -15,6 +15,7 @@ type PackagesPageProps = {
   searchTerm: string;
   hasSearched: boolean;
   hasLoadedState: boolean;
+  hasSteamPath: boolean;
   busy: string | null;
   onRefresh: () => void;
   onCheckPackageUpdates: () => void;
@@ -35,6 +36,7 @@ export function PackagesPage({
   searchTerm,
   hasSearched,
   hasLoadedState,
+  hasSteamPath,
   busy,
   onRefresh,
   onCheckPackageUpdates,
@@ -147,6 +149,7 @@ export function PackagesPage({
                 pkg={pkg}
                 index={index}
                 busy={busy}
+                hasSteamPath={hasSteamPath}
                 updateCheck={packageUpdateChecks[pkg.id]}
                 onUpdate={onUpdatePackage}
                 onToggle={onTogglePackage}

@@ -411,6 +411,7 @@ fn import_package_archive(
 
     let mut store = load_store()?;
     let root = portable_data_dir()?;
+    let should_enable = enabled && configured_steam_path(&store).is_some();
     if let Some(replace_id) = replace_package_id
         .as_deref()
         .map(str::trim)
@@ -458,7 +459,7 @@ fn import_package_archive(
         lua_file_name: format!("wuhu_{package_id}.lua"),
         manifest_files,
         source_zip_name: file_name,
-        enabled,
+        enabled: should_enable,
         imported_at: now_seconds(),
         manifest_updated_at,
         manifest_file_size,
@@ -487,6 +488,7 @@ fn add_steam_game(app: AppHandle, app_id: u32, title: String) -> Result<AppState
 
     let mut store = load_store()?;
     let root = portable_data_dir()?;
+    let should_enable = configured_steam_path(&store).is_some();
     remove_existing_package(&mut store, &package_id)?;
 
     let package_dir = root.join("packages").join(&package_id);
@@ -502,7 +504,7 @@ fn add_steam_game(app: AppHandle, app_id: u32, title: String) -> Result<AppState
         lua_file_name: format!("wuhu_{package_id}.lua"),
         manifest_files: Vec::new(),
         source_zip_name: "Steam 搜索".to_string(),
-        enabled: true,
+        enabled: should_enable,
         imported_at: now_seconds(),
         manifest_updated_at: None,
         manifest_file_size: None,
@@ -522,12 +524,13 @@ fn add_steam_game(app: AppHandle, app_id: u32, title: String) -> Result<AppState
 #[tauri::command]
 fn set_package_enabled(app: AppHandle, id: String, enabled: bool) -> Result<AppState, String> {
     let mut store = load_store()?;
+    let next_enabled = enabled && configured_steam_path(&store).is_some();
     let package = store
         .packages
         .iter_mut()
         .find(|package| package.id == id)
         .ok_or_else(|| "没有找到这个清单".to_string())?;
-    package.enabled = enabled;
+    package.enabled = next_enabled;
     let package = package.clone();
     save_store(&store)?;
     sync_package_enabled(&store, &package)?;
@@ -749,7 +752,9 @@ async fn download_hubcap_manifest(
     }
 
     let response = client
-        .get(format!("https://hubcapmanifest.com/api/v1/manifest/{app_id}"))
+        .get(format!(
+            "https://hubcapmanifest.com/api/v1/manifest/{app_id}"
+        ))
         .bearer_auth(api_key)
         .send()
         .await
@@ -773,7 +778,10 @@ async fn download_hubcap_manifest(
     Ok((bytes, status))
 }
 
-async fn fetch_hubcap_quota(client: &reqwest::Client, api_key: &str) -> Result<HubcapQuota, String> {
+async fn fetch_hubcap_quota(
+    client: &reqwest::Client,
+    api_key: &str,
+) -> Result<HubcapQuota, String> {
     let response = client
         .get("https://hubcapmanifest.com/api/v1/user/stats")
         .bearer_auth(api_key)
@@ -1011,7 +1019,7 @@ fn files_match(expected: &Path, actual: &Path) -> bool {
 }
 
 fn sync_package_enabled(store: &AppStore, package: &PackageItem) -> Result<(), String> {
-    let Some(steam_path) = store.settings.steam_path.as_deref() else {
+    let Some(steam_path) = configured_steam_path(store) else {
         return Ok(());
     };
     let steam_root = Path::new(steam_path);
@@ -1079,7 +1087,7 @@ fn remove_existing_package(store: &mut AppStore, package_id: &str) -> Result<(),
         .find(|package| package.id == package_id)
         .cloned()
     {
-        if let Some(steam_path) = store.settings.steam_path.as_deref() {
+        if let Some(steam_path) = configured_steam_path(store) {
             remove_active_package(Path::new(steam_path), &existing)?;
         }
     }
@@ -1312,6 +1320,15 @@ fn detect_steam_path_internal() -> Option<String> {
 
 fn looks_like_steam_root(path: &Path) -> bool {
     path.join("steam.exe").exists() || path.join("Steam.exe").exists()
+}
+
+fn configured_steam_path(store: &AppStore) -> Option<&str> {
+    store
+        .settings
+        .steam_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
 }
 
 fn find_entry_index<R: Read + Seek>(

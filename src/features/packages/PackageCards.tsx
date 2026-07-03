@@ -72,6 +72,7 @@ type SavedPackageCardProps = {
   pkg: PackageItem;
   index: number;
   busy: string | null;
+  hasSteamPath: boolean;
   updateCheck?: PackageUpdateCheck;
   onUpdate: (pkg: PackageItem) => void;
   onToggle: (pkg: PackageItem, enabled: boolean) => void;
@@ -85,8 +86,18 @@ function updateCheckColor(kind: PackageUpdateCheck["kind"]) {
   return "steam.3";
 }
 
-export function SavedPackageCard({ pkg, index, busy, updateCheck, onUpdate, onToggle, onDelete }: SavedPackageCardProps) {
+export function SavedPackageCard({
+  pkg,
+  index,
+  busy,
+  hasSteamPath,
+  updateCheck,
+  onUpdate,
+  onToggle,
+  onDelete,
+}: SavedPackageCardProps) {
   const isUpdating = busy === `update-hubcap-${pkg.id}`;
+  const toggleTitle = hasSteamPath ? (pkg.enabled ? "禁用" : "启用") : "设置 Steam 路径后可启用";
 
   return (
     <Card className="package-card" p={0}>
@@ -114,12 +125,13 @@ export function SavedPackageCard({ pkg, index, busy, updateCheck, onUpdate, onTo
         </Stack>
 
         <Stack gap="sm" align="flex-end" justify="space-between">
-          <Group gap="xs" align="flex-start" wrap="nowrap">
+          <Group gap="xs" align="center" wrap="nowrap">
             <Switch
               checked={pkg.enabled}
               thumbIcon={null}
-              title={pkg.enabled ? "禁用" : "启用"}
-              aria-label={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
+              title={toggleTitle}
+              aria-label={`${toggleTitle} ${pkg.title}`}
+              disabled={!hasSteamPath || busy === `toggle-${pkg.id}`}
               onChange={(event) => onToggle(pkg, event.currentTarget.checked)}
             />
             <ActionIcon
