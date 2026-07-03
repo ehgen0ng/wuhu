@@ -213,7 +213,7 @@ fn import_package_from_bytes(
     let bytes = general_purpose::STANDARD
         .decode(data_base64)
         .map_err(|err| format!("zip 数据解码失败：{err}"))?;
-    import_package_archive(&app, file_name, bytes, None, None, None, None)
+    import_package_archive(&app, file_name, bytes, None, None, None, None, None, true)
 }
 
 #[tauri::command]
@@ -267,32 +267,7 @@ async fn add_hubcap_manifest(
     let store = load_store()?;
     let api_key = hubcap_api_key(&store)?;
     let client = hubcap_client()?;
-    let status = fetch_hubcap_manifest_status(&client, &api_key, app_id).await?;
-    if !status.available || status.update_in_progress.unwrap_or(false) {
-        return Err("当前没有可用清单".to_string());
-    }
-
-    let response = client
-        .get(format!("https://hubcapmanifest.com/api/v1/manifest/{app_id}"))
-        .bearer_auth(&api_key)
-        .send()
-        .await
-        .map_err(|err| format!("下载清单失败：{err}"))?;
-
-    let status_code = response.status();
-    if !status_code.is_success() {
-        let detail = hubcap_error_detail(response).await;
-        return Err(format!(
-            "下载清单失败：HTTP {status_code}{}",
-            detail_prefix(&detail)
-        ));
-    }
-
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| format!("读取清单失败：{err}"))?
-        .to_vec();
+    let (bytes, status) = download_hubcap_manifest(&client, &api_key, app_id).await?;
     let title = normalize_title(&title, app_id);
     let image_url = normalize_optional_text(image_url);
     import_package_archive(
@@ -303,6 +278,38 @@ async fn add_hubcap_manifest(
         image_url,
         status.file_modified,
         status.file_size,
+        None,
+        true,
+    )
+}
+
+#[tauri::command]
+async fn update_hubcap_manifest(app: AppHandle, id: String) -> Result<AppState, String> {
+    let store = load_store()?;
+    let package = store
+        .packages
+        .iter()
+        .find(|package| package.id == id)
+        .cloned()
+        .ok_or_else(|| "没有找到这个清单".to_string())?;
+    let app_id = package
+        .app_id
+        .ok_or_else(|| "这个清单没有可更新的 AppID".to_string())?;
+
+    let api_key = hubcap_api_key(&store)?;
+    let client = hubcap_client()?;
+    let (bytes, status) = download_hubcap_manifest(&client, &api_key, app_id).await?;
+
+    import_package_archive(
+        &app,
+        format!("{app_id}.zip"),
+        bytes,
+        Some(package.title),
+        package.image_url,
+        status.file_modified,
+        status.file_size,
+        Some(package.id),
+        package.enabled,
     )
 }
 
@@ -314,6 +321,8 @@ fn import_package_archive(
     image_url: Option<String>,
     manifest_updated_at: Option<String>,
     manifest_file_size: Option<u64>,
+    replace_package_id: Option<String>,
+    enabled: bool,
 ) -> Result<AppState, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice()))
         .map_err(|err| format!("zip 读取失败：{err}"))?;
@@ -348,6 +357,13 @@ fn import_package_archive(
 
     let mut store = load_store()?;
     let root = portable_data_dir()?;
+    if let Some(replace_id) = replace_package_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|replace_id| !replace_id.is_empty() && *replace_id != package_id.as_str())
+    {
+        remove_existing_package(&mut store, replace_id)?;
+    }
     remove_existing_package(&mut store, &package_id)?;
 
     let package_dir = root.join("packages").join(&package_id);
@@ -388,7 +404,7 @@ fn import_package_archive(
         lua_file_name: format!("wuhu_{package_id}.lua"),
         manifest_files,
         source_zip_name: file_name,
-        enabled: true,
+        enabled,
         imported_at: now_seconds(),
         manifest_updated_at,
         manifest_file_size,
@@ -668,6 +684,41 @@ async fn fetch_hubcap_manifest_status(
     })
 }
 
+async fn download_hubcap_manifest(
+    client: &reqwest::Client,
+    api_key: &str,
+    app_id: u32,
+) -> Result<(Vec<u8>, HubcapManifestStatus), String> {
+    let status = fetch_hubcap_manifest_status(client, api_key, app_id).await?;
+    if !status.available || status.update_in_progress.unwrap_or(false) {
+        return Err("当前没有可用清单".to_string());
+    }
+
+    let response = client
+        .get(format!("https://hubcapmanifest.com/api/v1/manifest/{app_id}"))
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|err| format!("下载清单失败：{err}"))?;
+
+    let status_code = response.status();
+    if !status_code.is_success() {
+        let detail = hubcap_error_detail(response).await;
+        return Err(format!(
+            "下载清单失败：HTTP {status_code}{}",
+            detail_prefix(&detail)
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| format!("读取清单失败：{err}"))?
+        .to_vec();
+
+    Ok((bytes, status))
+}
+
 async fn fetch_hubcap_quota(client: &reqwest::Client, api_key: &str) -> Result<HubcapQuota, String> {
     let response = client
         .get("https://hubcapmanifest.com/api/v1/user/stats")
@@ -776,6 +827,7 @@ pub fn run() {
             check_hubcap_manifest_statuses,
             get_hubcap_quota,
             add_hubcap_manifest,
+            update_hubcap_manifest,
             set_package_enabled,
             delete_package,
             install_opensteamtool,

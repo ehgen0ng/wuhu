@@ -4,22 +4,25 @@ import type { FormEvent } from "react";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { PageHeader } from "../../components/PageHeader";
 import { SectionHeading } from "../../components/SectionHeading";
-import type { Notice, PackageItem, SteamSearchResult } from "../../types";
+import type { Notice, PackageItem, PackageUpdateCheck, SteamSearchResult } from "../../types";
 import { SavedPackageCard, SearchResultCard } from "./PackageCards";
 
 type PackagesPageProps = {
   notice: Notice | null;
   packages: PackageItem[];
+  packageUpdateChecks: Record<string, PackageUpdateCheck>;
   searchResults: SteamSearchResult[];
   searchTerm: string;
   hasSearched: boolean;
   hasLoadedState: boolean;
   busy: string | null;
   onRefresh: () => void;
+  onCheckPackageUpdates: () => void;
   onImportFile: (file: File | null) => void;
   onSearch: (event: FormEvent<HTMLFormElement>) => void;
   onSearchTermChange: (value: string) => void;
   onAddSearchResult: (item: SteamSearchResult) => void;
+  onUpdatePackage: (pkg: PackageItem) => void;
   onTogglePackage: (pkg: PackageItem, enabled: boolean) => void;
   onDeletePackage: (pkg: PackageItem) => void;
 };
@@ -27,20 +30,24 @@ type PackagesPageProps = {
 export function PackagesPage({
   notice,
   packages,
+  packageUpdateChecks,
   searchResults,
   searchTerm,
   hasSearched,
   hasLoadedState,
   busy,
   onRefresh,
+  onCheckPackageUpdates,
   onImportFile,
   onSearch,
   onSearchTermChange,
   onAddSearchResult,
+  onUpdatePackage,
   onTogglePackage,
   onDeletePackage,
 }: PackagesPageProps) {
   const isRefreshing = busy === "refresh";
+  const isCheckingUpdates = busy === "check-package-updates";
   const isSearching = busy === "steam-search";
   const isImporting = busy === "import";
 
@@ -57,6 +64,15 @@ export function PackagesPage({
               onClick={onRefresh}
             >
               刷新
+            </Button>
+            <Button
+              variant="light"
+              leftSection={isCheckingUpdates ? <Loader color="steam" size={17} /> : <RefreshCcw size={17} />}
+              aria-busy={isCheckingUpdates}
+              onClick={onCheckPackageUpdates}
+              disabled={!packages.length || isCheckingUpdates}
+            >
+              检查更新
             </Button>
             <FileButton onChange={onImportFile} accept=".zip">
               {(props) => (
@@ -131,6 +147,8 @@ export function PackagesPage({
                 pkg={pkg}
                 index={index}
                 busy={busy}
+                updateCheck={packageUpdateChecks[pkg.id]}
+                onUpdate={onUpdatePackage}
                 onToggle={onTogglePackage}
                 onDelete={onDeletePackage}
               />

@@ -1,10 +1,10 @@
 import { ActionIcon, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
-import { PackagePlus, Trash2 } from "lucide-react";
+import { Download, PackagePlus, Trash2 } from "lucide-react";
 import { GameArt } from "../../components/GameArt";
 import { formatManifestTime, packageSubtitle, searchResultSubtitle } from "../../lib/format";
 import { canAddManifest, manifestIssueText, manifestStatusText } from "../../lib/hubcap";
 import { steamHeaderImage } from "../../lib/steam";
-import type { PackageItem, SteamSearchResult } from "../../types";
+import type { PackageItem, PackageUpdateCheck, SteamSearchResult } from "../../types";
 
 type SearchResultCardProps = {
   item: SteamSearchResult;
@@ -72,13 +72,24 @@ type SavedPackageCardProps = {
   pkg: PackageItem;
   index: number;
   busy: string | null;
+  updateCheck?: PackageUpdateCheck;
+  onUpdate: (pkg: PackageItem) => void;
   onToggle: (pkg: PackageItem, enabled: boolean) => void;
   onDelete: (pkg: PackageItem) => void;
 };
 
-export function SavedPackageCard({ pkg, index, busy, onToggle, onDelete }: SavedPackageCardProps) {
+function updateCheckColor(kind: PackageUpdateCheck["kind"]) {
+  if (kind === "success") return "green.4";
+  if (kind === "warning") return "yellow.5";
+  if (kind === "error") return "red.4";
+  return "steam.3";
+}
+
+export function SavedPackageCard({ pkg, index, busy, updateCheck, onUpdate, onToggle, onDelete }: SavedPackageCardProps) {
+  const isUpdating = busy === `update-hubcap-${pkg.id}`;
+
   return (
-      <Card className="package-card" p={0}>
+    <Card className="package-card" p={0}>
       <Card.Section>
         <GameArt primary={steamHeaderImage(pkg.appId)} fallback={pkg.imageUrl} tone={index} />
       </Card.Section>
@@ -95,27 +106,47 @@ export function SavedPackageCard({ pkg, index, busy, onToggle, onDelete }: Saved
               清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
             </Text>
           )}
+          {updateCheck && (
+            <Text c={updateCheckColor(updateCheck.kind)} size="xs" lh={1.35}>
+              {updateCheck.message}
+            </Text>
+          )}
         </Stack>
 
-        <Group gap="xs" align="flex-start" wrap="nowrap">
-          <Switch
-            checked={pkg.enabled}
-            thumbIcon={null}
-            title={pkg.enabled ? "禁用" : "启用"}
-            aria-label={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
-            onChange={(event) => onToggle(pkg, event.currentTarget.checked)}
-          />
-          <ActionIcon
-            color="red"
-            variant="subtle"
-            aria-label={`删除 ${pkg.title}`}
-            title="删除"
-            onClick={() => onDelete(pkg)}
-            disabled={busy === `delete-${pkg.id}`}
-          >
-            <Trash2 size={18} />
-          </ActionIcon>
-        </Group>
+        <Stack gap="sm" align="flex-end" justify="space-between">
+          <Group gap="xs" align="flex-start" wrap="nowrap">
+            <Switch
+              checked={pkg.enabled}
+              thumbIcon={null}
+              title={pkg.enabled ? "禁用" : "启用"}
+              aria-label={`${pkg.enabled ? "禁用" : "启用"} ${pkg.title}`}
+              onChange={(event) => onToggle(pkg, event.currentTarget.checked)}
+            />
+            <ActionIcon
+              color="red"
+              variant="subtle"
+              aria-label={`删除 ${pkg.title}`}
+              title="删除"
+              onClick={() => onDelete(pkg)}
+              disabled={busy === `delete-${pkg.id}`}
+            >
+              <Trash2 size={18} />
+            </ActionIcon>
+          </Group>
+          {updateCheck?.hasUpdate && (
+            <Button
+              miw={76}
+              variant="light"
+              leftSection={<Download size={17} />}
+              loading={isUpdating}
+              onClick={() => onUpdate(pkg)}
+              disabled={isUpdating}
+              aria-busy={isUpdating}
+            >
+              更新
+            </Button>
+          )}
+        </Stack>
       </Group>
     </Card>
   );

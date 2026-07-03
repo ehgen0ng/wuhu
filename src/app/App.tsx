@@ -5,10 +5,19 @@ import { PackagesPage } from "../features/packages/PackagesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { arrayBufferToBase64 } from "../lib/file";
 import { call } from "../lib/tauri";
-import { canAddManifest } from "../lib/hubcap";
+import { buildPackageUpdateCheck, canAddManifest } from "../lib/hubcap";
 import { wait, waitForNextPaint } from "../lib/render";
 import { enrichPackageMetadata, searchSteamStore } from "../lib/steam";
-import type { AppState, HubcapManifestStatus, HubcapQuota, Notice, Page, PackageItem, SteamSearchResult } from "../types";
+import type {
+  AppState,
+  HubcapManifestStatus,
+  HubcapQuota,
+  Notice,
+  PackageUpdateCheck,
+  Page,
+  PackageItem,
+  SteamSearchResult,
+} from "../types";
 import { AppLayout } from "./AppLayout";
 
 const APP_VERSION = appPackage.version;
@@ -46,6 +55,7 @@ export default function App() {
   const [steamPathInput, setSteamPathInput] = useState("");
   const [hubcapKeyInput, setHubcapKeyInput] = useState("");
   const [hubcapQuota, setHubcapQuota] = useState<HubcapQuota | null>(null);
+  const [packageUpdateChecks, setPackageUpdateChecks] = useState<Record<string, PackageUpdateCheck>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState<SteamSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -133,6 +143,7 @@ export default function App() {
       const [nextState] = await Promise.all([call<AppState>("get_initial_state"), wait(320)]);
       await applyAppState(nextState);
       clearSearchState();
+      setPackageUpdateChecks({});
     } catch (error) {
       setNotice({ page: "packages", text: String(error), kind: "error" });
     } finally {
@@ -184,6 +195,7 @@ export default function App() {
       },
       "已导入清单。",
     );
+    setPackageUpdateChecks({});
   }
 
   async function searchSteamGames(event: React.FormEvent<HTMLFormElement>) {
@@ -223,9 +235,7 @@ export default function App() {
       return results.map((item) => ({ ...item, manifestChecked: false, manifestStatus: null }));
     }
 
-    const statuses = await call<HubcapManifestStatus[]>("check_hubcap_manifest_statuses", {
-      appIds: results.map((item) => item.id),
-    });
+    const statuses = await fetchHubcapManifestStatuses(results.map((item) => item.id));
     const byAppId = new Map(statuses.map((status) => [status.appId, status]));
     return results.map((item) => ({
       ...item,
@@ -252,6 +262,7 @@ export default function App() {
         imageUrl: item.tinyImage,
       });
       await applyAppState(nextState);
+      setPackageUpdateChecks({});
 
       setNotice({ page: "packages", text: `已添加 ${item.name}。`, kind: "success" });
     } catch (error) {
@@ -276,6 +287,104 @@ export default function App() {
 
   async function deletePackage(pkg: PackageItem) {
     await runAction(`delete-${pkg.id}`, "packages", () => call<AppState>("delete_package", { id: pkg.id }), "已删除清单。");
+    setPackageUpdateChecks((current) => {
+      const next = { ...current };
+      delete next[pkg.id];
+      return next;
+    });
+  }
+
+  async function updatePackage(pkg: PackageItem) {
+    const label = `update-hubcap-${pkg.id}`;
+    if (!beginAction(label, true)) return;
+
+    try {
+      setNotice({ page: "packages", text: `正在更新 ${pkg.title}，请稍候。`, kind: "info" });
+      await waitForNextPaint();
+
+      const nextState = await call<AppState>("update_hubcap_manifest", { id: pkg.id });
+      await applyAppState(nextState);
+      setPackageUpdateChecks((current) => {
+        const next = { ...current };
+        delete next[pkg.id];
+        return next;
+      });
+
+      setNotice({ page: "packages", text: `已更新 ${pkg.title}。`, kind: "success" });
+    } catch (error) {
+      setNotice({ page: "packages", text: String(error), kind: "error" });
+    } finally {
+      endAction(label, true);
+    }
+  }
+
+  async function fetchHubcapManifestStatuses(appIds: number[]) {
+    const uniqueAppIds = Array.from(new Set(appIds.filter((appId) => appId > 0)));
+    const statuses: HubcapManifestStatus[] = [];
+
+    for (let index = 0; index < uniqueAppIds.length; index += 24) {
+      statuses.push(
+        ...(await call<HubcapManifestStatus[]>("check_hubcap_manifest_statuses", {
+          appIds: uniqueAppIds.slice(index, index + 24),
+        })),
+      );
+    }
+
+    return statuses;
+  }
+
+  async function checkPackageUpdates() {
+    const label = "check-package-updates";
+    if (!beginAction(label, true)) return;
+
+    try {
+      const checkablePackages = packages.filter((pkg) => typeof pkg.appId === "number" && pkg.appId > 0);
+      const skippedCount = packages.length - checkablePackages.length;
+
+      if (!checkablePackages.length) {
+        setNotice({ page: "packages", text: "没有可检查的清单：需要先识别 AppID。", kind: "warning" });
+        return;
+      }
+
+      if (!state?.settings.hubcapApiKey?.trim()) {
+        setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。", kind: "warning" });
+        return;
+      }
+
+      setNotice({ page: "packages", text: "正在检查清单更新，不会下载文件。", kind: "info" });
+      await waitForNextPaint();
+
+      const statuses = await fetchHubcapManifestStatuses(checkablePackages.map((pkg) => pkg.appId ?? 0));
+      const byAppId = new Map(statuses.map((status) => [status.appId, status]));
+      const nextChecks: Record<string, PackageUpdateCheck> = {};
+
+      for (const pkg of checkablePackages) {
+        nextChecks[pkg.id] = buildPackageUpdateCheck(pkg, byAppId.get(pkg.appId ?? 0) ?? null);
+      }
+
+      setPackageUpdateChecks((current) => ({ ...current, ...nextChecks }));
+
+      const updatedPackages = checkablePackages.filter((pkg) => nextChecks[pkg.id]?.hasUpdate);
+      const skippedText = skippedCount ? `，另有 ${skippedCount} 个未识别 AppID 的清单已跳过` : "";
+      if (updatedPackages.length) {
+        const examples = updatedPackages
+          .slice(0, 3)
+          .map((pkg) => pkg.title)
+          .join("、");
+        const suffix = updatedPackages.length > 3 ? " 等" : "";
+        setNotice({
+          page: "packages",
+          text: `发现 ${updatedPackages.length} 个清单有更新：${examples}${suffix}${skippedText}。`,
+          kind: "warning",
+        });
+      } else {
+        setNotice({ page: "packages", text: `检查完成，没有发现可用更新${skippedText}。`, kind: "success" });
+      }
+    } catch (error) {
+      setNotice({ page: "packages", text: String(error), kind: "error" });
+    } finally {
+      endAction(label, true);
+    }
   }
 
   async function saveSteamPath() {
@@ -391,16 +500,19 @@ export default function App() {
         <PackagesPage
           notice={notice}
           packages={packages}
+          packageUpdateChecks={packageUpdateChecks}
           searchResults={searchResults}
           searchTerm={searchTerm}
           hasSearched={hasSearched}
           hasLoadedState={hasLoadedState}
           busy={busy}
           onRefresh={refreshState}
+          onCheckPackageUpdates={checkPackageUpdates}
           onImportFile={handleImportFile}
           onSearch={searchSteamGames}
           onSearchTermChange={setSearchTerm}
           onAddSearchResult={addSearchResult}
+          onUpdatePackage={updatePackage}
           onTogglePackage={togglePackage}
           onDeletePackage={deletePackage}
         />

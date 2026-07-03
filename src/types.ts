@@ -44,6 +44,14 @@ export type Notice = {
   kind?: NoticeKind;
 };
 
+export type PackageUpdateCheck = {
+  status: HubcapManifestStatus | null;
+  hasUpdate: boolean;
+  message: string;
+  kind: NoticeKind;
+  checkedAt: number;
+};
+
 export type SteamSearchPrice = {
   currency: string;
   initial: number;
