@@ -14,6 +14,7 @@ const DLL_NAMES: [&str; 3] = ["dwmapi.dll", "xinput1_4.dll", "OpenSteamTool.dll"
 const STORE_FILE: &str = "state.json";
 const HTTP_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15";
+const RELEASE_REPOSITORY: &str = "ehgen0ng/wuhu";
 
 struct EmbeddedToolFile {
     name: &'static str,
@@ -161,6 +162,23 @@ struct HubcapQuota {
     daily_limit: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppRelease {
+    version: String,
+    name: Option<String>,
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseResponse {
+    tag_name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
+}
+
 #[tauri::command]
 fn get_initial_state(app: AppHandle) -> Result<AppState, String> {
     let mut store = load_store()?;
@@ -251,6 +269,42 @@ async fn get_hubcap_quota() -> Result<HubcapQuota, String> {
     let api_key = hubcap_api_key(&store)?;
     let client = hubcap_client()?;
     fetch_hubcap_quota(&client, &api_key).await
+}
+
+#[tauri::command]
+async fn get_latest_app_release() -> Result<AppRelease, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .user_agent(HTTP_USER_AGENT)
+        .build()
+        .map_err(|err| format!("创建版本检查请求失败：{err}"))?;
+    let response = client
+        .get(format!(
+            "https://api.github.com/repos/{RELEASE_REPOSITORY}/releases/latest"
+        ))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|err| format!("检查版本失败：{err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("检查版本失败：HTTP {}", response.status()));
+    }
+
+    let release = response
+        .json::<GithubReleaseResponse>()
+        .await
+        .map_err(|err| format!("解析版本信息失败：{err}"))?;
+    let version = release.tag_name.trim().trim_start_matches('v').to_string();
+    if version.is_empty() {
+        return Err("版本信息为空".to_string());
+    }
+
+    Ok(AppRelease {
+        version,
+        name: release.name,
+        url: release.html_url,
+    })
 }
 
 #[tauri::command]
@@ -826,6 +880,7 @@ pub fn run() {
             set_hubcap_api_key,
             check_hubcap_manifest_statuses,
             get_hubcap_quota,
+            get_latest_app_release,
             add_hubcap_manifest,
             update_hubcap_manifest,
             set_package_enabled,

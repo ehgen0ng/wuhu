@@ -92,3 +92,9 @@ export type HubcapQuota = {
   dailyUsage: number;
   dailyLimit: number;
 };
+
+export type AppRelease = {
+  version: string;
+  name: string | null;
+  url: string | null;
+};

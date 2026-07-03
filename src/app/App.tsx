@@ -12,6 +12,7 @@ import type {
   AppState,
   HubcapManifestStatus,
   HubcapQuota,
+  AppRelease,
   Notice,
   PackageUpdateCheck,
   Page,
@@ -49,12 +50,38 @@ function waitForTauriRuntime(timeoutMs = 2500) {
   });
 }
 
+function parseVersionParts(version: string) {
+  return version
+    .trim()
+    .replace(/^v/i, "")
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+function isVersionNewer(remoteVersion: string, currentVersion: string) {
+  const remoteParts = parseVersionParts(remoteVersion);
+  const currentParts = parseVersionParts(currentVersion);
+  const length = Math.max(remoteParts.length, currentParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const remotePart = remoteParts[index] ?? 0;
+    const currentPart = currentParts[index] ?? 0;
+    if (remotePart > currentPart) return true;
+    if (remotePart < currentPart) return false;
+  }
+
+  return false;
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>("packages");
   const [state, setState] = useState<AppState | null>(null);
   const [steamPathInput, setSteamPathInput] = useState("");
   const [hubcapKeyInput, setHubcapKeyInput] = useState("");
   const [hubcapQuota, setHubcapQuota] = useState<HubcapQuota | null>(null);
+  const [latestRelease, setLatestRelease] = useState<AppRelease | null>(null);
+  const [releaseCheckBusy, setReleaseCheckBusy] = useState(false);
   const [packageUpdateChecks, setPackageUpdateChecks] = useState<Record<string, PackageUpdateCheck>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState<SteamSearchResult[]>([]);
@@ -66,6 +93,8 @@ export default function App() {
 
   const packages = state?.packages ?? [];
   const hasLoadedState = state !== null;
+  const appUpdateRelease =
+    latestRelease && isVersionNewer(latestRelease.version, APP_VERSION) ? latestRelease : null;
 
   async function applyAppState(nextState: AppState) {
     const applyVersion = stateApplyVersion.current + 1;
@@ -79,6 +108,32 @@ export default function App() {
     setState(enrichedState);
     setSteamPathInput(enrichedState.settings.steamPath ?? "");
     setHubcapKeyInput(enrichedState.settings.hubcapApiKey ?? "");
+  }
+
+  async function checkLatestRelease(showResult = false) {
+    if (releaseCheckBusy) return;
+
+    setReleaseCheckBusy(true);
+    try {
+      const release = await call<AppRelease>("get_latest_app_release");
+      const hasUpdate = isVersionNewer(release.version, APP_VERSION);
+      setLatestRelease(hasUpdate ? release : null);
+      if (showResult) {
+        setNotice({
+          page: "settings",
+          text: hasUpdate ? `发现最新版本：v${release.version}。` : "已是最新版本。",
+          kind: hasUpdate ? "warning" : "success",
+        });
+      }
+    } catch (error) {
+      console.info("[wuhu] latest release check skipped", error);
+      setLatestRelease(null);
+      if (showResult) {
+        setNotice({ page: "settings", text: "暂时没有检查到新版本。", kind: "info" });
+      }
+    } finally {
+      setReleaseCheckBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -108,6 +163,10 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    void checkLatestRelease();
   }, []);
 
   function switchPage(nextPage: Page) {
@@ -519,12 +578,13 @@ export default function App() {
       ) : (
         <SettingsPage
           appVersion={APP_VERSION}
+          latestRelease={appUpdateRelease}
+          releaseCheckBusy={releaseCheckBusy}
           notice={notice}
           state={state}
           steamPathInput={steamPathInput}
           hubcapKeyInput={hubcapKeyInput}
           hubcapQuota={hubcapQuota}
-          busy={busy}
           onSteamPathChange={setSteamPathInput}
           onHubcapKeyChange={(value) => {
             setHubcapKeyInput(value);
@@ -535,6 +595,7 @@ export default function App() {
           onChooseSteamPath={chooseSteamPath}
           onSaveHubcapKey={saveHubcapKey}
           onRefreshHubcapQuota={refreshHubcapQuota}
+          onCheckLatestRelease={() => checkLatestRelease(true)}
           onInstallOpenSteamTool={() =>
             runAction(
               "install",

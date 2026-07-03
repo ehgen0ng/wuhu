@@ -197,6 +197,15 @@ button:disabled {
   pointer-events: none;
 }
 
+.release-update-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #ff4d4f;
+  box-shadow: 0 0 0 3px rgba(255, 77, 79, 0.14);
+}
+
 .mantine-Input-input::placeholder {
   color: #738aa0;
 }

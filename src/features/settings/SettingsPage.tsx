@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Group,
+  Loader,
   PasswordInput,
   SimpleGrid,
   Switch,
@@ -22,17 +23,18 @@ import { NoticeAlert } from "../../components/NoticeAlert";
 import { PageHeader } from "../../components/PageHeader";
 import { SettingSection } from "../../components/SettingSection";
 import { formatHubcapQuota, formatSteamBuildDate, formatSteamVersion } from "../../lib/format";
-import type { AppState, HubcapQuota, Notice } from "../../types";
+import type { AppRelease, AppState, HubcapQuota, Notice } from "../../types";
 import { InfoTile } from "./InfoTile";
 
 type SettingsPageProps = {
   appVersion: string;
+  latestRelease: AppRelease | null;
+  releaseCheckBusy: boolean;
   notice: Notice | null;
   state: AppState | null;
   steamPathInput: string;
   hubcapKeyInput: string;
   hubcapQuota: HubcapQuota | null;
-  busy: string | null;
   onSteamPathChange: (value: string) => void;
   onHubcapKeyChange: (value: string) => void;
   onSaveSteamPath: () => void;
@@ -40,6 +42,7 @@ type SettingsPageProps = {
   onChooseSteamPath: () => void;
   onSaveHubcapKey: () => void;
   onRefreshHubcapQuota: () => void;
+  onCheckLatestRelease: () => void;
   onInstallOpenSteamTool: () => void;
   onRestoreOpenSteamTool: () => void;
   onToggleSteamClientLock: (locked: boolean) => void;
@@ -47,12 +50,13 @@ type SettingsPageProps = {
 
 export function SettingsPage({
   appVersion,
+  latestRelease,
+  releaseCheckBusy,
   notice,
   state,
   steamPathInput,
   hubcapKeyInput,
   hubcapQuota,
-  busy,
   onSteamPathChange,
   onHubcapKeyChange,
   onSaveSteamPath,
@@ -60,6 +64,7 @@ export function SettingsPage({
   onChooseSteamPath,
   onSaveHubcapKey,
   onRefreshHubcapQuota,
+  onCheckLatestRelease,
   onInstallOpenSteamTool,
   onRestoreOpenSteamTool,
   onToggleSteamClientLock,
@@ -190,7 +195,33 @@ export function SettingsPage({
       </SettingSection>
 
       <SettingSection icon={Info} title="当前版本">
-        <InfoTile label="wuhu" value={`v${appVersion}`} />
+        <InfoTile
+          label="wuhu"
+          value={`v${appVersion}`}
+          detail={latestRelease ? `最新版本：v${latestRelease.version}` : undefined}
+          action={
+            <Group gap="sm" wrap="nowrap">
+              {latestRelease && (
+                <span
+                  className="release-update-dot"
+                  aria-label={`最新版本：v${latestRelease.version}`}
+                  title={`最新版本：v${latestRelease.version}`}
+                />
+              )}
+              <ActionIcon
+                color="steam"
+                variant="light"
+                onClick={onCheckLatestRelease}
+                disabled={releaseCheckBusy}
+                aria-busy={releaseCheckBusy}
+                aria-label="检查最新版本"
+                title="检查最新版本"
+              >
+                {releaseCheckBusy ? <Loader color="steam" size={17} /> : <RefreshCcw size={17} />}
+              </ActionIcon>
+            </Group>
+          }
+        />
       </SettingSection>
     </section>
   );
