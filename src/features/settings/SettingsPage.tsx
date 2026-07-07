@@ -34,13 +34,16 @@ type SettingsPageProps = {
   state: AppState | null;
   steamPathInput: string;
   hubcapKeyInput: string;
+  depotboxKeyInput: string;
   hubcapQuota: HubcapQuota | null;
   onSteamPathChange: (value: string) => void;
   onHubcapKeyChange: (value: string) => void;
+  onDepotboxKeyChange: (value: string) => void;
   onSaveSteamPath: () => void;
   onDetectSteamPath: () => void;
   onChooseSteamPath: () => void;
   onSaveHubcapKey: () => void;
+  onSaveDepotboxKey: () => void;
   onRefreshHubcapQuota: () => void;
   onCheckLatestRelease: () => void;
   onInstallOpenSteamTool: () => void;
@@ -56,13 +59,16 @@ export function SettingsPage({
   state,
   steamPathInput,
   hubcapKeyInput,
+  depotboxKeyInput,
   hubcapQuota,
   onSteamPathChange,
   onHubcapKeyChange,
+  onDepotboxKeyChange,
   onSaveSteamPath,
   onDetectSteamPath,
   onChooseSteamPath,
   onSaveHubcapKey,
+  onSaveDepotboxKey,
   onRefreshHubcapQuota,
   onCheckLatestRelease,
   onInstallOpenSteamTool,
@@ -139,6 +145,26 @@ export function SettingsPage({
             variant="filled"
             c="#06121e"
             onClick={onSaveHubcapKey}
+          >
+            保存
+          </Button>
+        </Group>
+      </SettingSection>
+
+      <SettingSection icon={KeyRound} title="DepotBox Key">
+        <Group align="stretch" gap="sm" wrap="nowrap" className="responsive-control-row">
+          <PasswordInput
+            value={depotboxKeyInput}
+            onChange={(event) => onDepotboxKeyChange(event.currentTarget.value)}
+            placeholder="Key"
+            autoComplete="off"
+            className="grow-control"
+          />
+          <Button
+            color="steam"
+            variant="filled"
+            c="#06121e"
+            onClick={onSaveDepotboxKey}
           >
             保存
           </Button>

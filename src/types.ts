@@ -15,6 +15,7 @@ export type PackageItem = {
 export type AppSettings = {
   steamPath: string | null;
   hubcapApiKey: string | null;
+  depotboxApiKey: string | null;
 };
 
 export type InstallStatus = {
@@ -45,7 +46,7 @@ export type Notice = {
 };
 
 export type PackageUpdateCheck = {
-  status: HubcapManifestStatus | null;
+  status: ManifestStatus | null;
   hasUpdate: boolean;
   message: string;
   kind: NoticeKind;
@@ -72,11 +73,14 @@ export type SteamSearchResult = {
   price: SteamSearchPrice | null;
   platforms: SteamSearchPlatforms | null;
   manifestChecking?: boolean;
-  manifestStatus?: HubcapManifestStatus | null;
+  manifestStatus?: ManifestStatus | null;
   manifestChecked?: boolean;
 };
 
-export type HubcapManifestStatus = {
+export type ManifestProvider = "hubcap" | "depotbox";
+
+export type ManifestStatus = {
+  provider: ManifestProvider;
   appId: number;
   gameName: string | null;
   status: string | null;
@@ -88,6 +92,8 @@ export type HubcapManifestStatus = {
   fileModified: string | null;
   error: string | null;
 };
+
+export type HubcapManifestStatus = ManifestStatus;
 
 export type HubcapQuota = {
   dailyUsage: number;

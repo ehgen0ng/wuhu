@@ -5,14 +5,14 @@ import { PackagesPage } from "../features/packages/PackagesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { arrayBufferToBase64 } from "../lib/file";
 import { call } from "../lib/tauri";
-import { buildPackageUpdateCheck, canAddManifest } from "../lib/hubcap";
+import { buildPackageUpdateCheck, canAddManifest, isManifestAvailable } from "../lib/manifest";
 import { wait, waitForNextPaint } from "../lib/render";
 import { createSteamSearchSources, enrichPackageMetadata } from "../lib/steam";
 import type {
   AppState,
-  HubcapManifestStatus,
   HubcapQuota,
   AppRelease,
+  ManifestStatus,
   Notice,
   PackageUpdateCheck,
   Page,
@@ -79,6 +79,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [steamPathInput, setSteamPathInput] = useState("");
   const [hubcapKeyInput, setHubcapKeyInput] = useState("");
+  const [depotboxKeyInput, setDepotboxKeyInput] = useState("");
   const [hubcapQuota, setHubcapQuota] = useState<HubcapQuota | null>(null);
   const [latestRelease, setLatestRelease] = useState<AppRelease | null>(null);
   const [releaseCheckBusy, setReleaseCheckBusy] = useState(false);
@@ -104,12 +105,14 @@ export default function App() {
     setState(nextState);
     setSteamPathInput(nextState.settings.steamPath ?? "");
     setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
+    setDepotboxKeyInput(nextState.settings.depotboxApiKey ?? "");
 
     const enrichedState = await enrichPackageMetadata(nextState);
     if (stateApplyVersion.current !== applyVersion) return;
     setState(enrichedState);
     setSteamPathInput(enrichedState.settings.steamPath ?? "");
     setHubcapKeyInput(enrichedState.settings.hubcapApiKey ?? "");
+    setDepotboxKeyInput(enrichedState.settings.depotboxApiKey ?? "");
   }
 
   async function checkLatestRelease(showResult = false) {
@@ -285,7 +288,10 @@ export default function App() {
     setHasSearched(true);
     setSearchResults([]);
 
-    const hasHubcapKey = Boolean((state?.settings.hubcapApiKey ?? hubcapKeyInput).trim());
+    const hasManifestKey = Boolean(
+      (state?.settings.hubcapApiKey ?? hubcapKeyInput).trim() ||
+      (state?.settings.depotboxApiKey ?? depotboxKeyInput).trim(),
+    );
 
     await Promise.all(
       sources.map(async (source) => {
@@ -293,10 +299,10 @@ export default function App() {
           const results = await source.search(query);
           if (searchRunId.current !== runId) return;
 
-          const newResults = appendSearchSourceResults(results, seenAppIds, hasHubcapKey);
+          const newResults = appendSearchSourceResults(results, seenAppIds, hasManifestKey);
           resultCount += newResults.length;
 
-          if (newResults.length && hasHubcapKey) {
+          if (newResults.length && hasManifestKey) {
             void checkSearchResultManifestStatuses(newResults, runId);
           }
         } catch (error) {
@@ -345,7 +351,7 @@ export default function App() {
 
   async function checkSearchResultManifestStatuses(results: SteamSearchResult[], runId: number) {
     try {
-      const statuses = await fetchHubcapManifestStatuses(results.map((item) => item.id));
+      const statuses = await fetchPreferredManifestStatuses(results.map((item) => item.id));
       if (searchRunId.current !== runId) return;
 
       const byAppId = new Map(statuses.map((status) => [status.appId, status]));
@@ -371,11 +377,11 @@ export default function App() {
         current.map((item) =>
           checkedAppIds.has(item.id)
             ? {
-                ...item,
-                manifestChecking: false,
-                manifestChecked: true,
-                manifestStatus: null,
-              }
+              ...item,
+              manifestChecking: false,
+              manifestChecked: true,
+              manifestStatus: null,
+            }
             : item,
         ),
       );
@@ -383,7 +389,7 @@ export default function App() {
   }
 
   async function addSearchResult(item: SteamSearchResult) {
-    const label = `add-hubcap-${item.id}`;
+    const label = `add-manifest-${item.id}`;
     if (!beginAction(label, true)) return;
     try {
       setNotice({ page: "packages", text: `正在添加 ${item.name}，请稍候。`, kind: "info" });
@@ -394,7 +400,7 @@ export default function App() {
 
       await waitForNextPaint();
 
-      const nextState = await call<AppState>("add_hubcap_manifest", {
+      const nextState = await call<AppState>("add_remote_manifest", {
         appId: item.id,
         title: item.name,
         imageUrl: item.tinyImage,
@@ -420,9 +426,9 @@ export default function App() {
     setState((current) =>
       current
         ? {
-            ...current,
-            packages: current.packages.map((item) => (item.id === pkg.id ? { ...item, enabled } : item)),
-          }
+          ...current,
+          packages: current.packages.map((item) => (item.id === pkg.id ? { ...item, enabled } : item)),
+        }
         : current,
     );
 
@@ -444,14 +450,14 @@ export default function App() {
   }
 
   async function updatePackage(pkg: PackageItem) {
-    const label = `update-hubcap-${pkg.id}`;
+    const label = `update-manifest-${pkg.id}`;
     if (!beginAction(label, true)) return;
 
     try {
       setNotice({ page: "packages", text: `正在更新 ${pkg.title}，请稍候。`, kind: "info" });
       await waitForNextPaint();
 
-      const nextState = await call<AppState>("update_hubcap_manifest", { id: pkg.id });
+      const nextState = await call<AppState>("update_remote_manifest", { id: pkg.id });
       await applyAppState(nextState);
       setPackageUpdateChecks((current) => {
         const next = { ...current };
@@ -469,17 +475,77 @@ export default function App() {
 
   async function fetchHubcapManifestStatuses(appIds: number[]) {
     const uniqueAppIds = Array.from(new Set(appIds.filter((appId) => appId > 0)));
-    const statuses: HubcapManifestStatus[] = [];
+    const statuses: ManifestStatus[] = [];
 
     for (let index = 0; index < uniqueAppIds.length; index += 24) {
       statuses.push(
-        ...(await call<HubcapManifestStatus[]>("check_hubcap_manifest_statuses", {
+        ...(await call<ManifestStatus[]>("check_hubcap_manifest_statuses", {
           appIds: uniqueAppIds.slice(index, index + 24),
         })),
       );
     }
 
     return statuses;
+  }
+
+  async function fetchDepotBoxManifestStatuses(appIds: number[]) {
+    const uniqueAppIds = Array.from(new Set(appIds.filter((appId) => appId > 0)));
+    const statuses: ManifestStatus[] = [];
+
+    for (let index = 0; index < uniqueAppIds.length; index += 100) {
+      statuses.push(
+        ...(await call<ManifestStatus[]>("check_depotbox_manifest_statuses", {
+          appIds: uniqueAppIds.slice(index, index + 100),
+        })),
+      );
+    }
+
+    return statuses;
+  }
+
+  async function fetchPreferredManifestStatuses(appIds: number[]) {
+    const hasHubcapKey = Boolean(state?.settings.hubcapApiKey?.trim());
+    const hasDepotboxKey = Boolean(state?.settings.depotboxApiKey?.trim());
+
+    if (hasHubcapKey) {
+      try {
+        const hubcapStatuses = await fetchHubcapManifestStatuses(appIds);
+        if (!hasDepotboxKey) return hubcapStatuses;
+
+        const hubcapByAppId = new Map(hubcapStatuses.map((status) => [status.appId, status]));
+        const fallbackAppIds = Array.from(new Set(appIds.filter((appId) => {
+          const status = hubcapByAppId.get(appId);
+          return appId > 0 && (!status || !isManifestAvailable(status));
+        })));
+        if (!fallbackAppIds.length) return hubcapStatuses;
+
+        try {
+          const depotboxStatuses = await fetchDepotBoxManifestStatuses(fallbackAppIds);
+          const depotboxByAppId = new Map(depotboxStatuses.map((status) => [status.appId, status]));
+          return appIds
+            .filter((appId) => appId > 0)
+            .map((appId) => {
+              const hubcapStatus = hubcapByAppId.get(appId) ?? null;
+              if (isManifestAvailable(hubcapStatus)) return hubcapStatus;
+              return depotboxByAppId.get(appId) ?? hubcapStatus;
+            })
+            .filter((status): status is ManifestStatus => Boolean(status));
+        } catch (error) {
+          console.warn("[wuhu] fallback manifest status check failed", error);
+          return hubcapStatuses;
+        }
+      } catch (error) {
+        if (!hasDepotboxKey) throw error;
+        console.warn("[wuhu] manifest status check failed, trying another configured source", error);
+        return fetchDepotBoxManifestStatuses(appIds);
+      }
+    }
+
+    if (hasDepotboxKey) {
+      return fetchDepotBoxManifestStatuses(appIds);
+    }
+
+    throw new Error("请先在设置里保存 Key。");
   }
 
   async function checkPackageUpdates() {
@@ -495,18 +561,17 @@ export default function App() {
         return;
       }
 
-      if (!state?.settings.hubcapApiKey?.trim()) {
+      if (!state?.settings.hubcapApiKey?.trim() && !state?.settings.depotboxApiKey?.trim()) {
         setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。", kind: "warning" });
         return;
       }
 
-      setNotice({ page: "packages", text: "正在检查清单更新，不会下载文件。", kind: "info" });
+      setNotice({ page: "packages", text: "正在检查清单可用性，不会下载文件。", kind: "info" });
       await waitForNextPaint();
 
-      const statuses = await fetchHubcapManifestStatuses(checkablePackages.map((pkg) => pkg.appId ?? 0));
+      const statuses = await fetchPreferredManifestStatuses(checkablePackages.map((pkg) => pkg.appId ?? 0));
       const byAppId = new Map(statuses.map((status) => [status.appId, status]));
       const nextChecks: Record<string, PackageUpdateCheck> = {};
-
       for (const pkg of checkablePackages) {
         nextChecks[pkg.id] = buildPackageUpdateCheck(pkg, byAppId.get(pkg.appId ?? 0) ?? null);
       }
@@ -514,6 +579,10 @@ export default function App() {
       setPackageUpdateChecks((current) => ({ ...current, ...nextChecks }));
 
       const updatedPackages = checkablePackages.filter((pkg) => nextChecks[pkg.id]?.hasUpdate);
+      const unknownTimeCount = checkablePackages.filter((pkg) => {
+        const status = nextChecks[pkg.id]?.status;
+        return status?.available && !status.fileModified;
+      }).length;
       const skippedText = skippedCount ? `，另有 ${skippedCount} 个未识别 AppID 的清单已跳过` : "";
       if (updatedPackages.length) {
         const examples = updatedPackages
@@ -521,13 +590,21 @@ export default function App() {
           .map((pkg) => pkg.title)
           .join("、");
         const suffix = updatedPackages.length > 3 ? " 等" : "";
+        const unknownText = unknownTimeCount ? `，另有 ${unknownTimeCount} 个清单更新时间未知` : "";
         setNotice({
           page: "packages",
-          text: `发现 ${updatedPackages.length} 个清单有更新：${examples}${suffix}${skippedText}。`,
+          text: `发现 ${updatedPackages.length} 个清单有更新：${examples}${suffix}${unknownText}${skippedText}。`,
           kind: "warning",
         });
       } else {
-        setNotice({ page: "packages", text: `检查完成，没有发现可用更新${skippedText}。`, kind: "success" });
+        const checkedText = unknownTimeCount
+          ? `检查完成，已更新可用性状态；${unknownTimeCount} 个清单更新时间未知${skippedText}。`
+          : `检查完成，没有发现可用更新${skippedText}。`;
+        setNotice({
+          page: "packages",
+          text: checkedText,
+          kind: "success",
+        });
       }
     } catch (error) {
       setNotice({ page: "packages", text: String(error), kind: "error" });
@@ -563,6 +640,24 @@ export default function App() {
       setNotice({ page: "settings", text: "Key 已保存。", kind: "success" });
     } catch (error) {
       setHubcapQuota(null);
+      setNotice({ page: "settings", text: String(error), kind: "error" });
+    } finally {
+      endAction(label);
+    }
+  }
+
+  async function saveDepotboxKey() {
+    const label = "depotbox-key";
+    if (!beginAction(label)) return;
+    try {
+      setNotice(null);
+
+      const nextState = await call<AppState>("set_depotbox_api_key", { apiKey: depotboxKeyInput.trim() });
+      await applyAppState(nextState);
+      setPackageUpdateChecks({});
+
+      setNotice({ page: "settings", text: "Key 已保存。", kind: "success" });
+    } catch (error) {
       setNotice({ page: "settings", text: String(error), kind: "error" });
     } finally {
       endAction(label);
@@ -676,16 +771,19 @@ export default function App() {
           state={state}
           steamPathInput={steamPathInput}
           hubcapKeyInput={hubcapKeyInput}
+          depotboxKeyInput={depotboxKeyInput}
           hubcapQuota={hubcapQuota}
           onSteamPathChange={setSteamPathInput}
           onHubcapKeyChange={(value) => {
             setHubcapKeyInput(value);
             setHubcapQuota(null);
           }}
+          onDepotboxKeyChange={setDepotboxKeyInput}
           onSaveSteamPath={saveSteamPath}
           onDetectSteamPath={detectSteamPath}
           onChooseSteamPath={chooseSteamPath}
           onSaveHubcapKey={saveHubcapKey}
+          onSaveDepotboxKey={saveDepotboxKey}
           onRefreshHubcapQuota={refreshHubcapQuota}
           onCheckLatestRelease={() => checkLatestRelease(true)}
           onInstallOpenSteamTool={() =>

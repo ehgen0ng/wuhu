@@ -133,6 +133,35 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.package-card__body {
+  width: 100%;
+  position: relative;
+  display: block !important;
+}
+
+.package-card__content {
+  width: 100%;
+  min-width: 0;
+}
+
+.package-card__actions {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 1;
+}
+
+.package-card__body--with-actions .package-title {
+  max-width: calc(100% - 158px);
+}
+
+.package-meta {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .saved-section {
   margin-top: 30px;
   border-top: 1px solid rgba(143, 188, 221, 0.12);

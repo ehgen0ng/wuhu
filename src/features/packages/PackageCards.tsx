@@ -2,7 +2,7 @@ import { ActionIcon, Button, Card, Group, Stack, Switch, Text, Title } from "@ma
 import { Download, PackagePlus, Trash2 } from "lucide-react";
 import { GameArt } from "../../components/GameArt";
 import { formatManifestTime, packageSubtitle, searchResultSubtitle } from "../../lib/format";
-import { canAddManifest, manifestIssueText, manifestStatusText } from "../../lib/hubcap";
+import { canAddManifest, manifestIssueText, manifestStatusText } from "../../lib/manifest";
 import { steamHeaderImage } from "../../lib/steam";
 import type { PackageItem, PackageUpdateCheck, SteamSearchResult } from "../../types";
 
@@ -16,7 +16,7 @@ type SearchResultCardProps = {
 
 export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: SearchResultCardProps) {
   const canAdd = canAddManifest(item);
-  const isAdding = busy === `add-hubcap-${item.id}`;
+  const isAdding = busy === `add-manifest-${item.id}`;
   const manifestText = manifestStatusText(item);
   const manifestIssue = manifestIssueText(item);
 
@@ -25,16 +25,23 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
       <Card.Section>
         <GameArt primary={steamHeaderImage(item.id)} fallback={item.tinyImage} tone={index} />
       </Card.Section>
-      <Group align="flex-start" justify="space-between" gap="md" p="lg" wrap="nowrap">
-        <Stack gap={7} miw={0}>
+      <Group
+        className={`package-card__body${canAdd ? " package-card__body--with-actions" : ""}`}
+        align="flex-start"
+        justify="space-between"
+        gap="md"
+        p="lg"
+        wrap="nowrap"
+      >
+        <Stack className="package-card__content" gap={7} miw={0}>
           <Title order={2} className="package-title" size={21}>
             {item.name}
           </Title>
-          <Text c="dimmed" size="sm">
+          <Text className="package-meta" c="dimmed" size="sm">
             {searchResultSubtitle(item)}
           </Text>
           {manifestText && (
-            <Text c="steam.3" size="xs" lh={1.35}>
+            <Text className="package-meta" c="steam.3" size="xs" lh={1.35}>
               {manifestText}
             </Text>
           )}
@@ -44,7 +51,7 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
             </Text>
           )}
           {existingPackage?.manifestUpdatedAt && (
-            <Text c="dimmed" size="xs" lh={1.35}>
+            <Text className="package-meta" c="dimmed" size="xs" lh={1.35}>
               已添加：{formatManifestTime(existingPackage.manifestUpdatedAt)}
             </Text>
           )}
@@ -52,6 +59,7 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
 
         {canAdd && (
           <Button
+            className="package-card__actions"
             miw={existingPackage ? 112 : 86}
             variant="light"
             leftSection={<PackagePlus size={17} />}
@@ -96,7 +104,7 @@ export function SavedPackageCard({
   onToggle,
   onDelete,
 }: SavedPackageCardProps) {
-  const isUpdating = busy === `update-hubcap-${pkg.id}`;
+  const isUpdating = busy === `update-manifest-${pkg.id}`;
   const toggleTitle = hasSteamPath ? (pkg.enabled ? "禁用" : "启用") : "设置 Steam 路径后可启用";
 
   return (
@@ -104,17 +112,29 @@ export function SavedPackageCard({
       <Card.Section>
         <GameArt primary={steamHeaderImage(pkg.appId)} fallback={pkg.imageUrl} tone={index} />
       </Card.Section>
-      <Group align="flex-start" justify="space-between" gap="md" p="lg" wrap="nowrap">
-        <Stack gap={7} miw={0}>
+      <Group
+        className="package-card__body package-card__body--with-actions"
+        align="flex-start"
+        justify="space-between"
+        gap="md"
+        p="lg"
+        wrap="nowrap"
+      >
+        <Stack className="package-card__content" gap={7} miw={0}>
           <Title order={2} className="package-title" size={21}>
             {pkg.title}
           </Title>
-          <Text c="dimmed" size="sm">
+          <Text className="package-meta" c="dimmed" size="sm">
             {packageSubtitle(pkg)}
           </Text>
           {pkg.manifestUpdatedAt && (
-            <Text c="dimmed" size="xs" lh={1.35}>
+            <Text className="package-meta" c="dimmed" size="xs" lh={1.35}>
               清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
+            </Text>
+          )}
+          {!pkg.manifestUpdatedAt && pkg.manifestFiles.length > 0 && (
+            <Text className="package-meta" c="dimmed" size="xs" lh={1.35}>
+              清单更新：未知
             </Text>
           )}
           {updateCheck && (
@@ -124,7 +144,7 @@ export function SavedPackageCard({
           )}
         </Stack>
 
-        <Stack gap="sm" align="flex-end" justify="space-between">
+        <Stack className="package-card__actions" gap="sm" align="flex-end" justify="space-between">
           <Group gap="xs" align="center" wrap="nowrap">
             <Switch
               checked={pkg.enabled}

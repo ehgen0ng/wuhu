@@ -1,15 +1,17 @@
-import type { HubcapManifestStatus, PackageItem, PackageUpdateCheck, SteamSearchResult } from "../types";
+import type { ManifestStatus, PackageItem, PackageUpdateCheck, SteamSearchResult } from "../types";
 import { formatFileSize, formatManifestTime } from "./format";
 
-export function canAddManifest(item: SteamSearchResult) {
-  const status = item.manifestStatus;
+export function isManifestAvailable(status: ManifestStatus | null | undefined) {
   return Boolean(
-    item.manifestChecked &&
-      status?.available &&
+    status?.available &&
       status.manifestFileExists &&
       !status.updateInProgress &&
-      status.status?.toLowerCase() === "available",
+      (!status.status || status.status.toLowerCase() === "available"),
   );
+}
+
+export function canAddManifest(item: SteamSearchResult) {
+  return Boolean(item.manifestChecked && isManifestAvailable(item.manifestStatus));
 }
 
 export function manifestStatusText(item: SteamSearchResult) {
@@ -19,13 +21,16 @@ export function manifestStatusText(item: SteamSearchResult) {
   if (status.updateInProgress) return null;
   if (!canAddManifest(item)) return null;
   const size = formatFileSize(status.fileSize);
+  if (!status.fileModified) {
+    return `清单可用 · 更新时间未知${size ? ` · ${size}` : ""}`;
+  }
   return `清单更新：${formatManifestTime(status.fileModified)}${size ? ` · ${size}` : ""}`;
 }
 
 export function manifestIssueText(item: SteamSearchResult) {
   if (canAddManifest(item)) return null;
   if (item.manifestChecking) return "正在检查清单...";
-  if (!item.manifestChecked) return "未检查清单：请先保存 Hubcap Key。";
+  if (!item.manifestChecked) return "未检查清单：请先保存 Key。";
 
   const status = item.manifestStatus;
   if (!status) return "清单状态未知，请稍后重试。";
@@ -36,7 +41,7 @@ export function manifestIssueText(item: SteamSearchResult) {
   return "当前没有可用清单。";
 }
 
-export function hasPackageManifestUpdate(pkg: PackageItem, status: HubcapManifestStatus | null) {
+export function hasPackageManifestUpdate(pkg: PackageItem, status: ManifestStatus | null) {
   if (!status?.available || !status.fileModified || !pkg.manifestUpdatedAt) return false;
 
   const remoteTime = new Date(status.fileModified).getTime();
@@ -48,7 +53,7 @@ export function hasPackageManifestUpdate(pkg: PackageItem, status: HubcapManifes
 
 export function buildPackageUpdateCheck(
   pkg: PackageItem,
-  status: HubcapManifestStatus | null,
+  status: ManifestStatus | null,
 ): PackageUpdateCheck {
   const checkedAt = Date.now();
   if (!status) {
@@ -103,10 +108,10 @@ export function buildPackageUpdateCheck(
 
   const size = formatFileSize(status.fileSize);
   const suffix = size ? ` · ${size}` : "";
-  const remoteTime = formatManifestTime(status.fileModified);
   const hasUpdate = hasPackageManifestUpdate(pkg, status);
 
   if (hasUpdate) {
+    const remoteTime = formatManifestTime(status.fileModified);
     return {
       status,
       checkedAt,
@@ -116,6 +121,17 @@ export function buildPackageUpdateCheck(
     };
   }
 
+  if (!status.fileModified) {
+    return {
+      status,
+      checkedAt,
+      hasUpdate: false,
+      kind: "success",
+      message: `清单可用，更新时间未知${suffix}。`,
+    };
+  }
+
+  const remoteTime = formatManifestTime(status.fileModified);
   if (!pkg.manifestUpdatedAt) {
     return {
       status,

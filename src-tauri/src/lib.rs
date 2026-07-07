@@ -12,6 +12,7 @@ use zip::ZipArchive;
 
 const DLL_NAMES: [&str; 3] = ["dwmapi.dll", "xinput1_4.dll", "OpenSteamTool.dll"];
 const STORE_FILE: &str = "state.json";
+const DEPOTBOX_DOWNLOAD_POLL_LIMIT: usize = 60;
 const HTTP_USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15";
 const RELEASE_REPOSITORY: &str = "ehgen0ng/wuhu";
@@ -50,6 +51,8 @@ struct AppSettings {
     steam_path: Option<String>,
     #[serde(default)]
     hubcap_api_key: Option<String>,
+    #[serde(default)]
+    depotbox_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,14 +156,16 @@ struct ItadSearchGame {
 }
 
 #[derive(Debug, Deserialize)]
-struct HubcapErrorResponse {
+struct ApiErrorResponse {
     detail: Option<String>,
     error: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct HubcapManifestStatus {
+struct ManifestStatus {
+    provider: String,
     app_id: u32,
     game_name: Option<String>,
     status: Option<String>,
@@ -195,6 +200,16 @@ struct GithubReleaseResponse {
     name: Option<String>,
     #[serde(default)]
     html_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DepotBoxBatchAvailabilityRequest {
+    appids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DepotBoxDownloadRequest {
+    appid: String,
 }
 
 #[tauri::command]
@@ -266,9 +281,20 @@ fn set_hubcap_api_key(app: AppHandle, api_key: String) -> Result<AppState, Strin
 }
 
 #[tauri::command]
-async fn check_hubcap_manifest_statuses(
-    app_ids: Vec<u32>,
-) -> Result<Vec<HubcapManifestStatus>, String> {
+fn set_depotbox_api_key(app: AppHandle, api_key: String) -> Result<AppState, String> {
+    let mut store = load_store()?;
+    let trimmed = api_key.trim();
+    store.settings.depotbox_api_key = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    save_store(&store)?;
+    build_state(&app, store)
+}
+
+#[tauri::command]
+async fn check_hubcap_manifest_statuses(app_ids: Vec<u32>) -> Result<Vec<ManifestStatus>, String> {
     let store = load_store()?;
     let api_key = hubcap_api_key(&store)?;
     let client = hubcap_client()?;
@@ -279,6 +305,16 @@ async fn check_hubcap_manifest_statuses(
     }
 
     Ok(statuses)
+}
+
+#[tauri::command]
+async fn check_depotbox_manifest_statuses(
+    app_ids: Vec<u32>,
+) -> Result<Vec<ManifestStatus>, String> {
+    let store = load_store()?;
+    let api_key = depotbox_api_key(&store)?;
+    let client = depotbox_client()?;
+    fetch_depotbox_manifest_statuses(&client, &api_key, app_ids).await
 }
 
 #[tauri::command]
@@ -326,7 +362,7 @@ async fn get_latest_app_release() -> Result<AppRelease, String> {
 }
 
 #[tauri::command]
-async fn add_hubcap_manifest(
+async fn add_remote_manifest(
     app: AppHandle,
     app_id: u32,
     title: String,
@@ -337,9 +373,7 @@ async fn add_hubcap_manifest(
     }
 
     let store = load_store()?;
-    let api_key = hubcap_api_key(&store)?;
-    let client = hubcap_client()?;
-    let (bytes, status) = download_hubcap_manifest(&client, &api_key, app_id).await?;
+    let (bytes, status) = download_preferred_manifest(&store, app_id).await?;
     let title = normalize_title(&title, app_id);
     let image_url = normalize_optional_text(image_url);
     import_package_archive(
@@ -356,7 +390,7 @@ async fn add_hubcap_manifest(
 }
 
 #[tauri::command]
-async fn update_hubcap_manifest(app: AppHandle, id: String) -> Result<AppState, String> {
+async fn update_remote_manifest(app: AppHandle, id: String) -> Result<AppState, String> {
     let store = load_store()?;
     let package = store
         .packages
@@ -368,9 +402,7 @@ async fn update_hubcap_manifest(app: AppHandle, id: String) -> Result<AppState, 
         .app_id
         .ok_or_else(|| "这个清单没有可更新的 AppID".to_string())?;
 
-    let api_key = hubcap_api_key(&store)?;
-    let client = hubcap_client()?;
-    let (bytes, status) = download_hubcap_manifest(&client, &api_key, app_id).await?;
+    let (bytes, status) = download_preferred_manifest(&store, app_id).await?;
 
     import_package_archive(
         &app,
@@ -997,22 +1029,36 @@ fn hubcap_client() -> Result<reqwest::Client, String> {
         .map_err(|err| format!("创建清单请求失败：{err}"))
 }
 
+fn depotbox_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .user_agent(HTTP_USER_AGENT)
+        .build()
+        .map_err(|err| format!("创建清单请求失败：{err}"))
+}
+
 fn hubcap_api_key(store: &AppStore) -> Result<String, String> {
-    store
-        .settings
-        .hubcap_api_key
-        .as_deref()
+    trimmed_api_key(store.settings.hubcap_api_key.as_deref())
+        .ok_or_else(|| "请先在设置里保存 Key".to_string())
+}
+
+fn depotbox_api_key(store: &AppStore) -> Result<String, String> {
+    trimmed_api_key(store.settings.depotbox_api_key.as_deref())
+        .ok_or_else(|| "请先在设置里保存 Key".to_string())
+}
+
+fn trimmed_api_key(value: Option<&str>) -> Option<String> {
+    value
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(ToString::to_string)
-        .ok_or_else(|| "请先在设置里保存 Key".to_string())
 }
 
 async fn fetch_hubcap_manifest_status(
     client: &reqwest::Client,
     api_key: &str,
     app_id: u32,
-) -> Result<HubcapManifestStatus, String> {
+) -> Result<ManifestStatus, String> {
     let response = client
         .get(format!("https://hubcapmanifest.com/api/v1/status/{app_id}"))
         .bearer_auth(api_key)
@@ -1034,7 +1080,8 @@ async fn fetch_hubcap_manifest_status(
     }
 
     if !status_code.is_success() {
-        return Ok(HubcapManifestStatus {
+        return Ok(ManifestStatus {
+            provider: "hubcap".to_string(),
             app_id,
             game_name: None,
             status: Some(status_code.to_string()),
@@ -1054,7 +1101,8 @@ async fn fetch_hubcap_manifest_status(
     let status = value_as_string(&json, "status");
     let update_in_progress = value_as_bool(&json, "update_in_progress");
 
-    Ok(HubcapManifestStatus {
+    Ok(ManifestStatus {
+        provider: "hubcap".to_string(),
         app_id: value_as_u32(&json, "app_id").unwrap_or(app_id),
         game_name: value_as_string(&json, "game_name")
             .or_else(|| value_as_string(&json, "app_name")),
@@ -1080,7 +1128,7 @@ async fn download_hubcap_manifest(
     client: &reqwest::Client,
     api_key: &str,
     app_id: u32,
-) -> Result<(Vec<u8>, HubcapManifestStatus), String> {
+) -> Result<(Vec<u8>, ManifestStatus), String> {
     let status = fetch_hubcap_manifest_status(client, api_key, app_id).await?;
     if !status.available || status.update_in_progress.unwrap_or(false) {
         return Err("当前没有可用清单".to_string());
@@ -1111,6 +1159,317 @@ async fn download_hubcap_manifest(
         .to_vec();
 
     Ok((bytes, status))
+}
+
+async fn fetch_depotbox_manifest_statuses(
+    client: &reqwest::Client,
+    api_key: &str,
+    app_ids: Vec<u32>,
+) -> Result<Vec<ManifestStatus>, String> {
+    let unique_app_ids: Vec<u32> = app_ids
+        .into_iter()
+        .filter(|app_id| *app_id > 0)
+        .take(100)
+        .collect();
+    if unique_app_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let body = DepotBoxBatchAvailabilityRequest {
+        appids: unique_app_ids.iter().map(ToString::to_string).collect(),
+    };
+    let response = client
+        .post("https://depotbox.org/api/games/batch-availability")
+        .header("X-API-Key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|err| format!("检查清单失败：{err}"))?;
+
+    let status_code = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取清单状态失败：{err}"))?;
+
+    if status_code == reqwest::StatusCode::UNAUTHORIZED
+        || status_code == reqwest::StatusCode::FORBIDDEN
+    {
+        let detail = parse_api_error_detail(&text);
+        return Err(format!("Key 无效或无权限{}", detail_prefix(&detail)));
+    }
+
+    if status_code == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let detail = parse_api_error_detail(&text);
+        return Err(format!("请求过快，请稍后再试{}", detail_prefix(&detail)));
+    }
+
+    if !status_code.is_success() {
+        let detail = parse_api_error_detail(&text);
+        return Err(format!(
+            "检查清单失败：HTTP {status_code}{}",
+            detail_prefix(&detail)
+        ));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("解析清单状态失败：{err}"))?;
+    let results = json
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut by_app_id = std::collections::HashMap::new();
+    for value in results {
+        let Some(app_id) = value_as_u32(&value, "appid") else {
+            continue;
+        };
+        by_app_id.insert(app_id, depotbox_status_from_value(app_id, &value));
+    }
+
+    Ok(unique_app_ids
+        .into_iter()
+        .map(|app_id| {
+            by_app_id.remove(&app_id).unwrap_or_else(|| ManifestStatus {
+                provider: "depotbox".to_string(),
+                app_id,
+                game_name: None,
+                status: Some("missing".to_string()),
+                available: false,
+                manifest_file_exists: false,
+                update_in_progress: None,
+                needs_update: None,
+                file_size: None,
+                file_modified: None,
+                error: Some("没有返回这个 AppID 的清单状态。".to_string()),
+            })
+        })
+        .collect())
+}
+
+fn depotbox_status_from_value(app_id: u32, value: &serde_json::Value) -> ManifestStatus {
+    let source_available = value
+        .get("sources")
+        .and_then(serde_json::Value::as_object)
+        .map(|sources| {
+            sources
+                .values()
+                .any(|value| value.as_bool().unwrap_or(false))
+        })
+        .unwrap_or(false);
+    let available = value_as_bool(value, "available").unwrap_or(source_available);
+
+    ManifestStatus {
+        provider: "depotbox".to_string(),
+        app_id,
+        game_name: value_as_string(value, "name").or_else(|| value_as_string(value, "game_name")),
+        status: Some(
+            if available {
+                "available"
+            } else {
+                "unavailable"
+            }
+            .to_string(),
+        ),
+        available,
+        manifest_file_exists: available,
+        update_in_progress: None,
+        needs_update: None,
+        file_size: None,
+        file_modified: None,
+        error: None,
+    }
+}
+
+async fn download_depotbox_manifest(
+    client: &reqwest::Client,
+    api_key: &str,
+    app_id: u32,
+) -> Result<(Vec<u8>, ManifestStatus), String> {
+    let mut statuses = fetch_depotbox_manifest_statuses(client, api_key, vec![app_id]).await?;
+    let mut status = statuses
+        .pop()
+        .ok_or_else(|| "没有返回清单状态。".to_string())?;
+    if !status.available {
+        return Err(status
+            .error
+            .clone()
+            .unwrap_or_else(|| "当前没有可用清单".to_string()));
+    }
+
+    let body = DepotBoxDownloadRequest {
+        appid: app_id.to_string(),
+    };
+    let response = client
+        .post("https://depotbox.org/api/download")
+        .header("X-API-Key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|err| format!("下载清单失败：{err}"))?;
+
+    let status_code = response.status();
+    if !status_code.is_success() {
+        let detail = api_error_detail(response).await;
+        return Err(download_error_message(status_code, detail));
+    }
+
+    let json = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|err| format!("解析下载任务失败：{err}"))?;
+    let token = value_as_string(&json, "token")
+        .ok_or_else(|| "下载任务没有返回 token，请稍后重试。".to_string())?;
+    let download_link = poll_depotbox_download(client, api_key, &token).await?;
+    let bytes = fetch_depotbox_download(client, api_key, &download_link).await?;
+    status.file_size = Some(bytes.len() as u64);
+
+    Ok((bytes, status))
+}
+
+async fn poll_depotbox_download(
+    client: &reqwest::Client,
+    api_key: &str,
+    token: &str,
+) -> Result<String, String> {
+    for _ in 0..DEPOTBOX_DOWNLOAD_POLL_LIMIT {
+        let response = client
+            .get(format!("https://depotbox.org/api/status/{token}"))
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .map_err(|err| format!("检查下载进度失败：{err}"))?;
+
+        let status_code = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|err| format!("读取下载进度失败：{err}"))?;
+        if !status_code.is_success() {
+            return Err(download_error_message(
+                status_code,
+                parse_api_error_detail(&text),
+            ));
+        }
+
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|err| format!("解析下载进度失败：{err}"))?;
+        match value_as_string(&json, "status").as_deref() {
+            Some("completed") => {
+                return value_as_string(&json, "download_link")
+                    .ok_or_else(|| "下载完成但没有返回链接，请稍后重试。".to_string());
+            }
+            Some("failed") => return Err(depotbox_failed_status_message(&json)),
+            _ => tokio::time::sleep(Duration::from_millis(1500)).await,
+        }
+    }
+
+    Err("清单打包超时，请稍后重试。".to_string())
+}
+
+async fn fetch_depotbox_download(
+    client: &reqwest::Client,
+    api_key: &str,
+    download_link: &str,
+) -> Result<Vec<u8>, String> {
+    let url = if download_link.starts_with("http://") || download_link.starts_with("https://") {
+        download_link.to_string()
+    } else {
+        format!("https://depotbox.org{download_link}")
+    };
+    let response = client
+        .get(url)
+        .header("X-API-Key", api_key)
+        .send()
+        .await
+        .map_err(|err| format!("下载清单失败：{err}"))?;
+
+    let status_code = response.status();
+    if !status_code.is_success() {
+        let detail = api_error_detail(response).await;
+        return Err(download_error_message(status_code, detail));
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|err| format!("读取清单失败：{err}"))
+}
+
+fn depotbox_failed_status_message(json: &serde_json::Value) -> String {
+    let reason = value_as_string(json, "failureReason").unwrap_or_default();
+    let message = value_as_string(json, "message").unwrap_or_default();
+    let log_text = json
+        .get("logs")
+        .and_then(serde_json::Value::as_array)
+        .map(|logs| {
+            logs.iter()
+                .filter_map(|log| value_as_string(log, "message"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let lower = format!("{reason}\n{message}\n{log_text}").to_ascii_lowercase();
+
+    if lower.contains("manifest_not_found")
+        || lower.contains("no manifest")
+        || lower.contains("main depot key")
+        || lower.contains("app access token")
+    {
+        return "当前没有可下载清单。".to_string();
+    }
+
+    "清单下载失败，请稍后重试。".to_string()
+}
+
+fn download_error_message(status_code: reqwest::StatusCode, detail: Option<String>) -> String {
+    if status_code == reqwest::StatusCode::UNAUTHORIZED
+        || status_code == reqwest::StatusCode::FORBIDDEN
+    {
+        return format!("Key 无效或无权限{}", detail_prefix(&detail));
+    }
+    if status_code == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return format!("请求过快，请稍后再试{}", detail_prefix(&detail));
+    }
+
+    let lower = detail.as_deref().unwrap_or_default().to_ascii_lowercase();
+    if status_code == reqwest::StatusCode::NOT_FOUND
+        || lower.contains("manifest_not_found")
+        || lower.contains("manifest for the requested appid could not be found")
+    {
+        return "当前没有可下载清单。".to_string();
+    }
+
+    format!("下载清单失败：HTTP {status_code}{}", detail_prefix(&detail))
+}
+
+async fn download_preferred_manifest(
+    store: &AppStore,
+    app_id: u32,
+) -> Result<(Vec<u8>, ManifestStatus), String> {
+    let hubcap_key = trimmed_api_key(store.settings.hubcap_api_key.as_deref());
+    let depotbox_key = trimmed_api_key(store.settings.depotbox_api_key.as_deref());
+
+    if hubcap_key.is_none() && depotbox_key.is_none() {
+        return Err("请先在设置里保存 Key".to_string());
+    }
+
+    let mut hubcap_error = None;
+    if let Some(api_key) = hubcap_key.as_deref() {
+        let client = hubcap_client()?;
+        match download_hubcap_manifest(&client, api_key, app_id).await {
+            Ok(result) => return Ok(result),
+            Err(err) => hubcap_error = Some(err),
+        }
+    }
+
+    if let Some(api_key) = depotbox_key.as_deref() {
+        let client = depotbox_client()?;
+        return download_depotbox_manifest(&client, api_key, app_id).await;
+    }
+
+    Err(hubcap_error.unwrap_or_else(|| "当前没有可用清单".to_string()))
 }
 
 async fn fetch_hubcap_quota(
@@ -1155,17 +1514,25 @@ async fn fetch_hubcap_quota(
 }
 
 async fn hubcap_error_detail(response: reqwest::Response) -> Option<String> {
+    api_error_detail(response).await
+}
+
+async fn api_error_detail(response: reqwest::Response) -> Option<String> {
     response
         .text()
         .await
         .ok()
-        .and_then(|text| parse_hubcap_error_detail(&text))
+        .and_then(|text| parse_api_error_detail(&text))
 }
 
 fn parse_hubcap_error_detail(text: &str) -> Option<String> {
-    serde_json::from_str::<HubcapErrorResponse>(text)
+    parse_api_error_detail(text)
+}
+
+fn parse_api_error_detail(text: &str) -> Option<String> {
+    serde_json::from_str::<ApiErrorResponse>(text)
         .ok()
-        .and_then(|body| body.detail.or(body.error))
+        .and_then(|body| body.detail.or(body.error).or(body.message))
         .filter(|message| !message.trim().is_empty())
         .or_else(|| {
             let trimmed = text.trim();
@@ -1221,11 +1588,13 @@ pub fn run() {
             set_steam_path,
             import_package_from_bytes,
             set_hubcap_api_key,
+            set_depotbox_api_key,
             check_hubcap_manifest_statuses,
+            check_depotbox_manifest_statuses,
             get_hubcap_quota,
             get_latest_app_release,
-            add_hubcap_manifest,
-            update_hubcap_manifest,
+            add_remote_manifest,
+            update_remote_manifest,
             set_package_enabled,
             delete_package,
             install_opensteamtool,
