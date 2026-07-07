@@ -22,7 +22,7 @@ import {
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { PageHeader } from "../../components/PageHeader";
 import { SettingSection } from "../../components/SettingSection";
-import { formatHubcapQuota, formatSteamBuildDate, formatSteamVersion } from "../../lib/format";
+import { formatHubcapQuota, formatSteamBuildDate, formatSteamVersion } from "../../domain/display";
 import type { AppRelease, AppState, HubcapQuota, Notice } from "../../types";
 import { InfoTile } from "./InfoTile";
 

@@ -1,9 +1,10 @@
 import { ActionIcon, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
 import { Download, PackagePlus, Trash2 } from "lucide-react";
 import { GameArt } from "../../components/GameArt";
-import { formatManifestTime, packageSubtitle, searchResultSubtitle } from "../../lib/format";
-import { canAddManifest, manifestIssueText, manifestStatusText } from "../../lib/manifest";
-import { steamHeaderImage } from "../../lib/steam";
+import { formatManifestTime, packageSubtitle, searchResultSubtitle } from "../../domain/display";
+import { canAddManifest } from "../../domain/manifest";
+import { manifestIssueText, manifestStatusText } from "../../domain/manifestText";
+import { steamHeaderImage } from "../../domain/packageMetadata";
 import type { PackageItem, PackageUpdateCheck, SteamSearchResult } from "../../types";
 
 type SearchResultCardProps = {

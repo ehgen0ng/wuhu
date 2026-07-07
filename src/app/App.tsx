@@ -1,18 +1,34 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
-import appPackage from "../../package.json";
+import {
+  addRemoteManifest,
+  deletePackage as deletePackageCommand,
+  detectSteamPath as detectSteamPathCommand,
+  getHubcapQuota,
+  getInitialState,
+  getLatestAppRelease,
+  importPackageFromBytes,
+  installOpenSteamTool,
+  restoreOpenSteamTool,
+  setDepotboxApiKey,
+  setHubcapApiKey,
+  setPackageEnabled as setPackageEnabledCommand,
+  setSteamClientVersionLocked,
+  setSteamPath as setSteamPathCommand,
+  updateRemoteManifest,
+} from "../api/commands";
+import { buildPackageUpdateCheck, canAddManifest } from "../domain/manifest";
+import { enrichPackageMetadata } from "../domain/packageMetadata";
 import { PackagesPage } from "../features/packages/PackagesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { createGameSearchSources } from "../integrations/gameSearch";
+import { fetchPreferredManifestStatuses, hasConfiguredManifestSource } from "../integrations/manifests";
 import { arrayBufferToBase64 } from "../lib/file";
-import { call } from "../lib/tauri";
-import { buildPackageUpdateCheck, canAddManifest, isManifestAvailable } from "../lib/manifest";
 import { wait, waitForNextPaint } from "../lib/render";
-import { createSteamSearchSources, enrichPackageMetadata } from "../lib/steam";
 import type {
   AppState,
   HubcapQuota,
   AppRelease,
-  ManifestStatus,
   Notice,
   PackageUpdateCheck,
   Page,
@@ -20,59 +36,7 @@ import type {
   SteamSearchResult,
 } from "../types";
 import { AppLayout } from "./AppLayout";
-
-const APP_VERSION = appPackage.version;
-
-function isTauriRuntime() {
-  return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
-}
-
-function waitForTauriRuntime(timeoutMs = 2500) {
-  return new Promise<boolean>((resolve) => {
-    if (isTauriRuntime()) {
-      resolve(true);
-      return;
-    }
-
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      if (isTauriRuntime()) {
-        window.clearInterval(timer);
-        resolve(true);
-        return;
-      }
-
-      if (Date.now() - startedAt >= timeoutMs) {
-        window.clearInterval(timer);
-        resolve(false);
-      }
-    }, 50);
-  });
-}
-
-function parseVersionParts(version: string) {
-  return version
-    .trim()
-    .replace(/^v/i, "")
-    .split(/[.-]/)
-    .map((part) => Number.parseInt(part, 10))
-    .map((part) => (Number.isFinite(part) ? part : 0));
-}
-
-function isVersionNewer(remoteVersion: string, currentVersion: string) {
-  const remoteParts = parseVersionParts(remoteVersion);
-  const currentParts = parseVersionParts(currentVersion);
-  const length = Math.max(remoteParts.length, currentParts.length);
-
-  for (let index = 0; index < length; index += 1) {
-    const remotePart = remoteParts[index] ?? 0;
-    const currentPart = currentParts[index] ?? 0;
-    if (remotePart > currentPart) return true;
-    if (remotePart < currentPart) return false;
-  }
-
-  return false;
-}
+import { APP_VERSION, isVersionNewer, waitForTauriRuntime } from "./runtime";
 
 export default function App() {
   const [page, setPage] = useState<Page>("packages");
@@ -96,6 +60,11 @@ export default function App() {
 
   const packages = state?.packages ?? [];
   const hasLoadedState = state !== null;
+  const manifestSettings = state?.settings ?? {
+    steamPath: steamPathInput || null,
+    hubcapApiKey: hubcapKeyInput || null,
+    depotboxApiKey: depotboxKeyInput || null,
+  };
   const appUpdateRelease =
     latestRelease && isVersionNewer(latestRelease.version, APP_VERSION) ? latestRelease : null;
 
@@ -120,7 +89,7 @@ export default function App() {
 
     setReleaseCheckBusy(true);
     try {
-      const release = await call<AppRelease>("get_latest_app_release");
+      const release = await getLatestAppRelease();
       const hasUpdate = isVersionNewer(release.version, APP_VERSION);
       setLatestRelease(hasUpdate ? release : null);
       if (showResult) {
@@ -153,7 +122,7 @@ export default function App() {
       }
 
       try {
-        const nextState = await call<AppState>("get_initial_state");
+        const nextState = await getInitialState();
         if (!cancelled) {
           await applyAppState(nextState);
         }
@@ -206,7 +175,7 @@ export default function App() {
     if (!beginAction(label, true)) return;
     try {
       setNotice(null);
-      const [nextState] = await Promise.all([call<AppState>("get_initial_state"), wait(320)]);
+      const [nextState] = await Promise.all([getInitialState(), wait(320)]);
       await applyAppState(nextState);
       clearSearchState();
       setPackageUpdateChecks({});
@@ -255,10 +224,7 @@ export default function App() {
       "packages",
       async () => {
         const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
-        return call<AppState>("import_package_from_bytes", {
-          fileName: file.name,
-          dataBase64,
-        });
+        return importPackageFromBytes(file.name, dataBase64);
       },
       (nextState) =>
         nextState?.settings.steamPath
@@ -278,7 +244,7 @@ export default function App() {
 
     const runId = searchRunId.current + 1;
     searchRunId.current = runId;
-    const sources = createSteamSearchSources();
+    const sources = createGameSearchSources();
     const seenAppIds = new Set<number>();
     let failedSourceCount = 0;
     let resultCount = 0;
@@ -288,10 +254,7 @@ export default function App() {
     setHasSearched(true);
     setSearchResults([]);
 
-    const hasManifestKey = Boolean(
-      (state?.settings.hubcapApiKey ?? hubcapKeyInput).trim() ||
-      (state?.settings.depotboxApiKey ?? depotboxKeyInput).trim(),
-    );
+    const hasManifestKey = hasConfiguredManifestSource(manifestSettings);
 
     await Promise.all(
       sources.map(async (source) => {
@@ -306,7 +269,7 @@ export default function App() {
             void checkSearchResultManifestStatuses(newResults, runId);
           }
         } catch (error) {
-          console.warn(`[wuhu] ${source.label} search failed`, error);
+          console.warn(`[wuhu] search failed: ${source.id}`, error);
           failedSourceCount += 1;
         }
       }),
@@ -351,7 +314,7 @@ export default function App() {
 
   async function checkSearchResultManifestStatuses(results: SteamSearchResult[], runId: number) {
     try {
-      const statuses = await fetchPreferredManifestStatuses(results.map((item) => item.id));
+      const statuses = await fetchPreferredManifestStatuses(results.map((item) => item.id), manifestSettings);
       if (searchRunId.current !== runId) return;
 
       const byAppId = new Map(statuses.map((status) => [status.appId, status]));
@@ -400,11 +363,7 @@ export default function App() {
 
       await waitForNextPaint();
 
-      const nextState = await call<AppState>("add_remote_manifest", {
-        appId: item.id,
-        title: item.name,
-        imageUrl: item.tinyImage,
-      });
+      const nextState = await addRemoteManifest(item.id, item.name, item.tinyImage);
       await applyAppState(nextState);
       setPackageUpdateChecks({});
 
@@ -432,7 +391,7 @@ export default function App() {
         : current,
     );
 
-    await runAction(`toggle-${pkg.id}`, "packages", () => call<AppState>("set_package_enabled", { id: pkg.id, enabled }));
+    await runAction(`toggle-${pkg.id}`, "packages", () => setPackageEnabledCommand(pkg.id, enabled));
   }
 
   async function deletePackage(pkg: PackageItem) {
@@ -441,7 +400,7 @@ export default function App() {
     );
     if (!confirmed) return;
 
-    await runAction(`delete-${pkg.id}`, "packages", () => call<AppState>("delete_package", { id: pkg.id }), "已删除清单。");
+    await runAction(`delete-${pkg.id}`, "packages", () => deletePackageCommand(pkg.id), "已删除清单。");
     setPackageUpdateChecks((current) => {
       const next = { ...current };
       delete next[pkg.id];
@@ -457,7 +416,7 @@ export default function App() {
       setNotice({ page: "packages", text: `正在更新 ${pkg.title}，请稍候。`, kind: "info" });
       await waitForNextPaint();
 
-      const nextState = await call<AppState>("update_remote_manifest", { id: pkg.id });
+      const nextState = await updateRemoteManifest(pkg.id);
       await applyAppState(nextState);
       setPackageUpdateChecks((current) => {
         const next = { ...current };
@@ -473,81 +432,6 @@ export default function App() {
     }
   }
 
-  async function fetchHubcapManifestStatuses(appIds: number[]) {
-    const uniqueAppIds = Array.from(new Set(appIds.filter((appId) => appId > 0)));
-    const statuses: ManifestStatus[] = [];
-
-    for (let index = 0; index < uniqueAppIds.length; index += 24) {
-      statuses.push(
-        ...(await call<ManifestStatus[]>("check_hubcap_manifest_statuses", {
-          appIds: uniqueAppIds.slice(index, index + 24),
-        })),
-      );
-    }
-
-    return statuses;
-  }
-
-  async function fetchDepotBoxManifestStatuses(appIds: number[]) {
-    const uniqueAppIds = Array.from(new Set(appIds.filter((appId) => appId > 0)));
-    const statuses: ManifestStatus[] = [];
-
-    for (let index = 0; index < uniqueAppIds.length; index += 100) {
-      statuses.push(
-        ...(await call<ManifestStatus[]>("check_depotbox_manifest_statuses", {
-          appIds: uniqueAppIds.slice(index, index + 100),
-        })),
-      );
-    }
-
-    return statuses;
-  }
-
-  async function fetchPreferredManifestStatuses(appIds: number[]) {
-    const hasHubcapKey = Boolean(state?.settings.hubcapApiKey?.trim());
-    const hasDepotboxKey = Boolean(state?.settings.depotboxApiKey?.trim());
-
-    if (hasHubcapKey) {
-      try {
-        const hubcapStatuses = await fetchHubcapManifestStatuses(appIds);
-        if (!hasDepotboxKey) return hubcapStatuses;
-
-        const hubcapByAppId = new Map(hubcapStatuses.map((status) => [status.appId, status]));
-        const fallbackAppIds = Array.from(new Set(appIds.filter((appId) => {
-          const status = hubcapByAppId.get(appId);
-          return appId > 0 && (!status || !isManifestAvailable(status));
-        })));
-        if (!fallbackAppIds.length) return hubcapStatuses;
-
-        try {
-          const depotboxStatuses = await fetchDepotBoxManifestStatuses(fallbackAppIds);
-          const depotboxByAppId = new Map(depotboxStatuses.map((status) => [status.appId, status]));
-          return appIds
-            .filter((appId) => appId > 0)
-            .map((appId) => {
-              const hubcapStatus = hubcapByAppId.get(appId) ?? null;
-              if (isManifestAvailable(hubcapStatus)) return hubcapStatus;
-              return depotboxByAppId.get(appId) ?? hubcapStatus;
-            })
-            .filter((status): status is ManifestStatus => Boolean(status));
-        } catch (error) {
-          console.warn("[wuhu] fallback manifest status check failed", error);
-          return hubcapStatuses;
-        }
-      } catch (error) {
-        if (!hasDepotboxKey) throw error;
-        console.warn("[wuhu] manifest status check failed, trying another configured source", error);
-        return fetchDepotBoxManifestStatuses(appIds);
-      }
-    }
-
-    if (hasDepotboxKey) {
-      return fetchDepotBoxManifestStatuses(appIds);
-    }
-
-    throw new Error("请先在设置里保存 Key。");
-  }
-
   async function checkPackageUpdates() {
     const label = "check-package-updates";
     if (!beginAction(label, true)) return;
@@ -561,7 +445,7 @@ export default function App() {
         return;
       }
 
-      if (!state?.settings.hubcapApiKey?.trim() && !state?.settings.depotboxApiKey?.trim()) {
+      if (!state || !hasConfiguredManifestSource(state.settings)) {
         setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。", kind: "warning" });
         return;
       }
@@ -569,7 +453,7 @@ export default function App() {
       setNotice({ page: "packages", text: "正在检查清单可用性，不会下载文件。", kind: "info" });
       await waitForNextPaint();
 
-      const statuses = await fetchPreferredManifestStatuses(checkablePackages.map((pkg) => pkg.appId ?? 0));
+      const statuses = await fetchPreferredManifestStatuses(checkablePackages.map((pkg) => pkg.appId ?? 0), state.settings);
       const byAppId = new Map(statuses.map((status) => [status.appId, status]));
       const nextChecks: Record<string, PackageUpdateCheck> = {};
       for (const pkg of checkablePackages) {
@@ -617,7 +501,7 @@ export default function App() {
     await runAction(
       "steam-path",
       "settings",
-      () => call<AppState>("set_steam_path", { path: steamPathInput.trim() }),
+      () => setSteamPathCommand(steamPathInput.trim()),
       "Steam 路径已保存，请重新启用需要的清单。",
     );
   }
@@ -628,11 +512,11 @@ export default function App() {
     try {
       setNotice(null);
 
-      const nextState = await call<AppState>("set_hubcap_api_key", { apiKey: hubcapKeyInput.trim() });
+      const nextState = await setHubcapApiKey(hubcapKeyInput.trim());
       await applyAppState(nextState);
 
       if (hubcapKeyInput.trim()) {
-        setHubcapQuota(await call<HubcapQuota>("get_hubcap_quota"));
+        setHubcapQuota(await getHubcapQuota());
       } else {
         setHubcapQuota(null);
       }
@@ -652,7 +536,7 @@ export default function App() {
     try {
       setNotice(null);
 
-      const nextState = await call<AppState>("set_depotbox_api_key", { apiKey: depotboxKeyInput.trim() });
+      const nextState = await setDepotboxApiKey(depotboxKeyInput.trim());
       await applyAppState(nextState);
       setPackageUpdateChecks({});
 
@@ -669,7 +553,7 @@ export default function App() {
     if (!beginAction(label)) return;
     try {
       setNotice(null);
-      setHubcapQuota(await call<HubcapQuota>("get_hubcap_quota"));
+      setHubcapQuota(await getHubcapQuota());
     } catch (error) {
       setHubcapQuota(null);
       setNotice({ page: "settings", text: String(error), kind: "error" });
@@ -683,7 +567,7 @@ export default function App() {
     if (!beginAction(label)) return;
 
     try {
-      const path = await call<string | null>("detect_steam_path");
+      const path = await detectSteamPathCommand();
       if (!path) throw new Error("没有自动检测到 Steam 路径，可以手动填写 Steam 根目录。");
 
       setSteamPathInput(path);
@@ -692,7 +576,7 @@ export default function App() {
         return;
       }
 
-      const nextState = await call<AppState>("set_steam_path", { path });
+      const nextState = await setSteamPathCommand(path);
       await applyAppState(nextState);
       setNotice({ page: "settings", text: "已自动检测并保存 Steam 路径，请重新启用需要的清单。", kind: "success" });
     } catch (error) {
@@ -716,7 +600,7 @@ export default function App() {
       await runAction(
         "steam-path",
         "settings",
-        () => call<AppState>("set_steam_path", { path: selectedPath }),
+        () => setSteamPathCommand(selectedPath),
         "Steam 路径已保存，请重新启用需要的清单。",
       );
     } catch (error) {
@@ -728,7 +612,7 @@ export default function App() {
     await runAction(
       "steam-client-lock",
       "settings",
-      () => call<AppState>("set_steam_client_version_locked", { locked }),
+      () => setSteamClientVersionLocked(locked),
       locked ? "已锁定 Steam 客户端版本。" : "已取消锁定 Steam 客户端版本。",
     );
   }
@@ -790,12 +674,12 @@ export default function App() {
             runAction(
               "install",
               "settings",
-              () => call<AppState>("install_opensteamtool"),
+              () => installOpenSteamTool(),
               "安装完成。建议重启 Steam 后生效。",
             )
           }
           onRestoreOpenSteamTool={() =>
-            runAction("restore", "settings", () => call<AppState>("restore_opensteamtool"), "已移除组件。")
+            runAction("restore", "settings", () => restoreOpenSteamTool(), "已移除组件。")
           }
           onToggleSteamClientLock={toggleSteamClientLock}
         />
