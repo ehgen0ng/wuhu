@@ -120,7 +120,7 @@ export function SettingsPage({
           <PasswordInput
             value={hubcapKeyInput}
             onChange={(event) => onHubcapKeyChange(event.currentTarget.value)}
-            placeholder="Hubcap Key"
+            placeholder="Key"
             autoComplete="off"
             className="grow-control"
           />
@@ -129,8 +129,8 @@ export function SettingsPage({
             variant="light"
             onClick={onRefreshHubcapQuota}
             disabled={!hasSavedHubcapKey}
-            aria-label="刷新 Hubcap 额度"
-            title="刷新 Hubcap 额度"
+            aria-label="刷新额度"
+            title="刷新额度"
           >
             <RefreshCcw size={17} />
           </ActionIcon>

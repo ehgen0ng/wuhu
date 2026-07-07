@@ -52,7 +52,7 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
 
         {canAdd && (
           <Button
-            miw={86}
+            miw={existingPackage ? 112 : 86}
             variant="light"
             leftSection={<PackagePlus size={17} />}
             loading={isAdding}

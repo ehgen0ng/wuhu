@@ -24,6 +24,7 @@ export function manifestStatusText(item: SteamSearchResult) {
 
 export function manifestIssueText(item: SteamSearchResult) {
   if (canAddManifest(item)) return null;
+  if (item.manifestChecking) return "正在检查清单...";
   if (!item.manifestChecked) return "未检查清单：请先保存 Hubcap Key。";
 
   const status = item.manifestStatus;

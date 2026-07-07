@@ -135,6 +135,24 @@ struct SteamSearchResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheapSharkGame {
+    #[serde(rename = "steamAppID")]
+    steam_app_id: Option<String>,
+    external: Option<String>,
+    thumb: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItadSearchGame {
+    slug: String,
+    title: String,
+    #[serde(default)]
+    assets: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HubcapErrorResponse {
     detail: Option<String>,
     error: Option<String>,
@@ -626,11 +644,7 @@ async fn search_steam_games(query: String) -> Result<Vec<SteamSearchItem>, Strin
         return Ok(Vec::new());
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(12))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|err| format!("创建 Steam 搜索请求失败：{err}"))?;
+    let client = search_client("创建 Steam 搜索请求失败")?;
     let response = client
         .get("https://store.steampowered.com/api/storesearch/")
         .query(&[("term", query), ("l", "schinese"), ("cc", "cn")])
@@ -652,6 +666,327 @@ async fn search_steam_games(query: String) -> Result<Vec<SteamSearchItem>, Strin
         .filter(|item| item.item_type == "app" && !item.name.trim().is_empty())
         .take(24)
         .collect())
+}
+
+#[tauri::command]
+async fn search_steam_suggest_games(query: String) -> Result<Vec<SteamSearchItem>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client = search_client("创建 Steam 搜索建议请求失败")?;
+    let response = client
+        .get("https://store.steampowered.com/search/suggest")
+        .query(&[
+            ("term", query),
+            ("f", "games"),
+            ("cc", "cn"),
+            ("realm", "1"),
+            ("l", "schinese"),
+        ])
+        .send()
+        .await
+        .map_err(|err| format!("Steam 搜索建议请求失败：{err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Steam 搜索建议失败：HTTP {}", response.status()));
+    }
+
+    let html = response
+        .text()
+        .await
+        .map_err(|err| format!("读取 Steam 搜索建议失败：{err}"))?;
+    Ok(parse_steam_suggest_items(&html))
+}
+
+#[tauri::command]
+async fn search_cheapshark_games(query: String) -> Result<Vec<SteamSearchItem>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client = search_client("创建 CheapShark 搜索请求失败")?;
+    let response = client
+        .get("https://www.cheapshark.com/api/1.0/games")
+        .query(&[("title", query), ("limit", "10")])
+        .send()
+        .await
+        .map_err(|err| format!("CheapShark 搜索请求失败：{err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("CheapShark 搜索失败：HTTP {}", response.status()));
+    }
+
+    let games = response
+        .json::<Vec<CheapSharkGame>>()
+        .await
+        .map_err(|err| format!("解析 CheapShark 搜索结果失败：{err}"))?;
+
+    Ok(games
+        .into_iter()
+        .filter_map(|game| {
+            let id = game.steam_app_id?.parse::<u32>().ok()?;
+            let name = game.external?.trim().to_string();
+            if id == 0 || name.is_empty() {
+                return None;
+            }
+
+            Some(SteamSearchItem {
+                item_type: "app".to_string(),
+                name,
+                id,
+                tiny_image: game.thumb,
+                price: None,
+                platforms: None,
+            })
+        })
+        .take(24)
+        .collect())
+}
+
+#[tauri::command]
+async fn search_isthereanydeal_games(query: String) -> Result<Vec<SteamSearchItem>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    if contains_cjk(query) {
+        return Ok(Vec::new());
+    }
+
+    let client = search_client("创建 IsThereAnyDeal 搜索请求失败")?;
+    let response = send_itad_search_request(&client, query).await?;
+
+    let games = response
+        .json::<Vec<ItadSearchGame>>()
+        .await
+        .map_err(|err| format!("解析 IsThereAnyDeal 搜索结果失败：{err}"))?;
+
+    let mut tasks = Vec::new();
+    for (index, game) in games.into_iter().take(10).enumerate() {
+        let client = client.clone();
+        tasks.push(tauri::async_runtime::spawn(async move {
+            (index, resolve_itad_search_game(client, game).await)
+        }));
+    }
+
+    let mut indexed_items = Vec::new();
+    for task in tasks {
+        if let Ok((index, Some(item))) = task.await {
+            indexed_items.push((index, item));
+        }
+    }
+    indexed_items.sort_by_key(|(index, _)| *index);
+
+    let mut items: Vec<SteamSearchItem> = Vec::new();
+    for (_, item) in indexed_items {
+        if !items.iter().any(|current| current.id == item.id) {
+            items.push(item);
+        }
+    }
+    Ok(items)
+}
+
+fn search_client(error_prefix: &str) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .user_agent(HTTP_USER_AGENT)
+        .build()
+        .map_err(|err| format!("{error_prefix}：{err}"))
+}
+
+async fn send_itad_search_request(
+    client: &reqwest::Client,
+    query: &str,
+) -> Result<reqwest::Response, String> {
+    let mut last_error = "未知错误".to_string();
+
+    for attempt in 0..3 {
+        match client
+            .get("https://isthereanydeal.com/search/api/games/")
+            .query(&[("q", query)])
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => return Ok(response),
+            Ok(response) => {
+                let status = response.status();
+                last_error = format!("HTTP {status}");
+                if !is_retryable_http_status(status) {
+                    break;
+                }
+            }
+            Err(err) => {
+                last_error = err.to_string();
+            }
+        }
+
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(350 * (attempt + 1)));
+        }
+    }
+
+    Err(format!("IsThereAnyDeal 搜索失败：{last_error}"))
+}
+
+fn is_retryable_http_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.as_u16() >= 500
+}
+
+async fn resolve_itad_search_game(
+    client: reqwest::Client,
+    game: ItadSearchGame,
+) -> Option<SteamSearchItem> {
+    let name = game.title.trim().to_string();
+    if name.is_empty() || game.slug.trim().is_empty() {
+        return None;
+    }
+
+    let response = client
+        .get(format!(
+            "https://isthereanydeal.com/game/{}/info/",
+            game.slug.trim()
+        ))
+        .header(reqwest::header::ACCEPT, "text/html")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let html = response.text().await.ok()?;
+    let id = extract_itad_app_id(&html)?;
+
+    Some(SteamSearchItem {
+        item_type: "app".to_string(),
+        name,
+        id,
+        tiny_image: itad_asset_url(&game.assets),
+        price: None,
+        platforms: None,
+    })
+}
+
+fn parse_steam_suggest_items(html: &str) -> Vec<SteamSearchItem> {
+    html.split("<a ")
+        .skip(1)
+        .filter_map(parse_steam_suggest_anchor)
+        .take(24)
+        .collect()
+}
+
+fn parse_steam_suggest_anchor(anchor: &str) -> Option<SteamSearchItem> {
+    let id = find_html_attr(anchor, "data-ds-appid")?
+        .parse::<u32>()
+        .ok()?;
+    let name = extract_between(anchor, "<div class=\"match_name\">", "</div>")
+        .map(decode_html_text)
+        .map(|value| value.trim().to_string())?;
+
+    if id == 0 || name.is_empty() {
+        return None;
+    }
+
+    let tiny_image = extract_between(anchor, "<div class=\"match_img\">", "</div>")
+        .and_then(|image_html| find_html_attr(image_html, "src"));
+    let price = extract_between(anchor, "<div class=\"match_price\">", "</div>")
+        .map(decode_html_text)
+        .and_then(|text| parse_cny_price(&text));
+
+    Some(SteamSearchItem {
+        item_type: "app".to_string(),
+        name,
+        id,
+        tiny_image,
+        price,
+        platforms: None,
+    })
+}
+
+fn find_html_attr(html: &str, attr: &str) -> Option<String> {
+    let marker = format!("{attr}=\"");
+    let start = html.find(&marker)? + marker.len();
+    let rest = &html[start..];
+    let end = rest.find('"')?;
+    Some(decode_html_text(&rest[..end]))
+}
+
+fn extract_itad_app_id(html: &str) -> Option<u32> {
+    [
+        "https://store.steampowered.com/app/",
+        "https://steamdb.info/app/",
+        "https://www.protondb.com/app/",
+        "/steam/apps/",
+    ]
+    .into_iter()
+    .find_map(|marker| parse_digits_after(html, marker))
+}
+
+fn parse_digits_after(text: &str, marker: &str) -> Option<u32> {
+    let start = text.find(marker)? + marker.len();
+    let digits: String = text[start..]
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().ok().filter(|id| *id > 0)
+}
+
+fn itad_asset_url(assets: &Option<serde_json::Value>) -> Option<String> {
+    let object = assets.as_ref()?.as_object()?;
+    ["boxart", "banner145", "banner300", "banner400"]
+        .into_iter()
+        .find_map(|key| object.get(key)?.as_str().map(ToString::to_string))
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|character| {
+        matches!(
+            character as u32,
+            0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xF900..=0xFAFF
+                | 0x20000..=0x2A6DF
+                | 0x2A700..=0x2B73F
+                | 0x2B740..=0x2B81F
+                | 0x2B820..=0x2CEAF
+        )
+    })
+}
+
+fn extract_between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let start_index = text.find(start)? + start.len();
+    let rest = &text[start_index..];
+    let end_index = rest.find(end)?;
+    Some(&rest[..end_index])
+}
+
+fn decode_html_text(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+}
+
+fn parse_cny_price(text: &str) -> Option<SteamSearchPrice> {
+    let normalized: String = text
+        .chars()
+        .filter(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let value = normalized.parse::<f64>().ok()?;
+    Some(SteamSearchPrice {
+        currency: "CNY".to_string(),
+        initial: (value * 100.0).round() as u32,
+        final_price: (value * 100.0).round() as u32,
+    })
 }
 
 fn hubcap_client() -> Result<reqwest::Client, String> {
@@ -787,13 +1122,13 @@ async fn fetch_hubcap_quota(
         .bearer_auth(api_key)
         .send()
         .await
-        .map_err(|err| format!("读取 Hubcap 额度失败：{err}"))?;
+        .map_err(|err| format!("读取额度失败：{err}"))?;
 
     let status_code = response.status();
     let text = response
         .text()
         .await
-        .map_err(|err| format!("读取 Hubcap 额度失败：{err}"))?;
+        .map_err(|err| format!("读取额度失败：{err}"))?;
 
     if status_code == reqwest::StatusCode::UNAUTHORIZED
         || status_code == reqwest::StatusCode::FORBIDDEN
@@ -805,13 +1140,13 @@ async fn fetch_hubcap_quota(
     if !status_code.is_success() {
         let detail = parse_hubcap_error_detail(&text);
         return Err(format!(
-            "读取 Hubcap 额度失败：HTTP {status_code}{}",
+            "读取额度失败：HTTP {status_code}{}",
             detail_prefix(&detail)
         ));
     }
 
     let json: serde_json::Value =
-        serde_json::from_str(&text).map_err(|err| format!("解析 Hubcap 额度失败：{err}"))?;
+        serde_json::from_str(&text).map_err(|err| format!("解析额度失败：{err}"))?;
 
     Ok(HubcapQuota {
         daily_usage: value_as_u64(&json, "daily_usage").unwrap_or(0),
@@ -897,6 +1232,9 @@ pub fn run() {
             restore_opensteamtool,
             set_steam_client_version_locked,
             search_steam_games,
+            search_steam_suggest_games,
+            search_cheapshark_games,
+            search_isthereanydeal_games,
             add_steam_game
         ])
         .run(tauri::generate_context!())

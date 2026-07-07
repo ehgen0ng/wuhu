@@ -17,6 +17,7 @@ type PackagesPageProps = {
   hasLoadedState: boolean;
   hasSteamPath: boolean;
   busy: string | null;
+  isSearching: boolean;
   onRefresh: () => void;
   onCheckPackageUpdates: () => void;
   onImportFile: (file: File | null) => void;
@@ -38,6 +39,7 @@ export function PackagesPage({
   hasLoadedState,
   hasSteamPath,
   busy,
+  isSearching,
   onRefresh,
   onCheckPackageUpdates,
   onImportFile,
@@ -50,7 +52,6 @@ export function PackagesPage({
 }: PackagesPageProps) {
   const isRefreshing = busy === "refresh";
   const isCheckingUpdates = busy === "check-package-updates";
-  const isSearching = busy === "steam-search";
   const isImporting = busy === "import";
 
   return (

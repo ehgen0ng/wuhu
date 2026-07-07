@@ -18,6 +18,18 @@ type RawSteamSearchItem = {
   platforms?: SteamSearchPlatforms | null;
 };
 
+type SteamSearchCommand =
+  | "search_steam_games"
+  | "search_steam_suggest_games"
+  | "search_cheapshark_games"
+  | "search_isthereanydeal_games";
+
+export type SteamSearchSource = {
+  id: string;
+  label: string;
+  search: (query: string) => Promise<SteamSearchResult[]>;
+};
+
 function normalizeSteamSearchItem(item: RawSteamSearchItem): SteamSearchResult | null {
   const itemType = item.itemType ?? item.type ?? "";
   const name = item.name?.trim() ?? "";
@@ -33,9 +45,42 @@ function normalizeSteamSearchItem(item: RawSteamSearchItem): SteamSearchResult |
   };
 }
 
-export async function searchSteamStore(query: string): Promise<SteamSearchResult[]> {
-  const items = await call<RawSteamSearchItem[]>("search_steam_games", { query });
+function normalizeSteamSearchResults(items: RawSteamSearchItem[]) {
   return items.map(normalizeSteamSearchItem).filter((item): item is SteamSearchResult => Boolean(item));
+}
+
+async function searchSteamCommand(command: SteamSearchCommand, query: string): Promise<SteamSearchResult[]> {
+  const items = await call<RawSteamSearchItem[]>(command, { query });
+  return normalizeSteamSearchResults(items);
+}
+
+export async function searchSteamStore(query: string): Promise<SteamSearchResult[]> {
+  return searchSteamCommand("search_steam_games", query);
+}
+
+export function createSteamSearchSources(): SteamSearchSource[] {
+  return [
+    {
+      id: "steam-store",
+      label: "Steam 商店",
+      search: (query) => searchSteamCommand("search_steam_games", query),
+    },
+    {
+      id: "steam-suggest",
+      label: "Steam 建议",
+      search: (query) => searchSteamCommand("search_steam_suggest_games", query),
+    },
+    {
+      id: "cheapshark",
+      label: "CheapShark",
+      search: (query) => searchSteamCommand("search_cheapshark_games", query),
+    },
+    {
+      id: "isthereanydeal",
+      label: "IsThereAnyDeal",
+      search: (query) => searchSteamCommand("search_isthereanydeal_games", query),
+    },
+  ];
 }
 
 export function steamHeaderImage(appId: number | null | undefined) {

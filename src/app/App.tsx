@@ -7,7 +7,7 @@ import { arrayBufferToBase64 } from "../lib/file";
 import { call } from "../lib/tauri";
 import { buildPackageUpdateCheck, canAddManifest } from "../lib/hubcap";
 import { wait, waitForNextPaint } from "../lib/render";
-import { enrichPackageMetadata, searchSteamStore } from "../lib/steam";
+import { createSteamSearchSources, enrichPackageMetadata } from "../lib/steam";
 import type {
   AppState,
   HubcapManifestStatus,
@@ -86,9 +86,11 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState<SteamSearchResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const busyRef = useRef<string | null>(null);
+  const searchRunId = useRef(0);
   const stateApplyVersion = useRef(0);
 
   const packages = state?.packages ?? [];
@@ -175,6 +177,8 @@ export default function App() {
   }
 
   function clearSearchState() {
+    searchRunId.current += 1;
+    setIsSearching(false);
     setSearchTerm("");
     setSearchResults([]);
     setHasSearched(false);
@@ -263,48 +267,119 @@ export default function App() {
 
   async function searchSteamGames(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const label = "steam-search";
-    if (!beginAction(label, true)) return;
     const query = searchTerm.trim();
     if (!query) {
-      endAction(label, true);
       setNotice({ page: "packages", text: "请输入游戏名称。", kind: "warning" });
       return;
     }
 
-    try {
-      setNotice(null);
-      setHasSearched(true);
-      const results = await searchSteamStore(query);
-      const resultsWithStatuses = await attachHubcapStatuses(results);
-      setSearchResults(resultsWithStatuses);
-      if (!results.length) {
-        setNotice({ page: "packages", text: "没有搜索结果。", kind: "info" });
-      }
-    } catch (error) {
-      setSearchResults([]);
-      setNotice({ page: "packages", text: String(error), kind: "error" });
-    } finally {
-      endAction(label, true);
+    const runId = searchRunId.current + 1;
+    searchRunId.current = runId;
+    const sources = createSteamSearchSources();
+    const seenAppIds = new Set<number>();
+    let failedSourceCount = 0;
+    let resultCount = 0;
+
+    setIsSearching(true);
+    setNotice(null);
+    setHasSearched(true);
+    setSearchResults([]);
+
+    const hasHubcapKey = Boolean((state?.settings.hubcapApiKey ?? hubcapKeyInput).trim());
+
+    await Promise.all(
+      sources.map(async (source) => {
+        try {
+          const results = await source.search(query);
+          if (searchRunId.current !== runId) return;
+
+          const newResults = appendSearchSourceResults(results, seenAppIds, hasHubcapKey);
+          resultCount += newResults.length;
+
+          if (newResults.length && hasHubcapKey) {
+            void checkSearchResultManifestStatuses(newResults, runId);
+          }
+        } catch (error) {
+          console.warn(`[wuhu] ${source.label} search failed`, error);
+          failedSourceCount += 1;
+        }
+      }),
+    );
+
+    if (searchRunId.current !== runId) return;
+
+    setIsSearching(false);
+    if (resultCount === 0) {
+      setNotice({
+        page: "packages",
+        text: failedSourceCount === sources.length ? "搜索失败，请稍后重试。" : "没有搜索结果。",
+        kind: failedSourceCount === sources.length ? "error" : "info",
+      });
     }
   }
 
-  async function attachHubcapStatuses(results: SteamSearchResult[]) {
-    if (!results.length) return results;
+  function appendSearchSourceResults(
+    results: SteamSearchResult[],
+    seenAppIds: Set<number>,
+    checkManifests: boolean,
+  ) {
+    const newResults = results
+      .filter((item) => {
+        if (!item.id || seenAppIds.has(item.id)) return false;
+        seenAppIds.add(item.id);
+        return true;
+      })
+      .map((item) => ({
+        ...item,
+        manifestChecking: checkManifests,
+        manifestChecked: false,
+        manifestStatus: null,
+      }));
 
-    const apiKey = state?.settings.hubcapApiKey?.trim() || hubcapKeyInput.trim();
-    if (!apiKey) {
-      setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。", kind: "warning" });
-      return results.map((item) => ({ ...item, manifestChecked: false, manifestStatus: null }));
+    if (newResults.length) {
+      setSearchResults((current) => [...current, ...newResults]);
     }
 
-    const statuses = await fetchHubcapManifestStatuses(results.map((item) => item.id));
-    const byAppId = new Map(statuses.map((status) => [status.appId, status]));
-    return results.map((item) => ({
-      ...item,
-      manifestChecked: true,
-      manifestStatus: byAppId.get(item.id) ?? null,
-    }));
+    return newResults;
+  }
+
+  async function checkSearchResultManifestStatuses(results: SteamSearchResult[], runId: number) {
+    try {
+      const statuses = await fetchHubcapManifestStatuses(results.map((item) => item.id));
+      if (searchRunId.current !== runId) return;
+
+      const byAppId = new Map(statuses.map((status) => [status.appId, status]));
+      const checkedAppIds = new Set(results.map((item) => item.id));
+
+      setSearchResults((current) =>
+        current.map((item) => {
+          if (!checkedAppIds.has(item.id)) return item;
+          return {
+            ...item,
+            manifestChecking: false,
+            manifestChecked: true,
+            manifestStatus: byAppId.get(item.id) ?? null,
+          };
+        }),
+      );
+    } catch (error) {
+      if (searchRunId.current !== runId) return;
+
+      console.warn("[wuhu] search result manifest status check failed", error);
+      const checkedAppIds = new Set(results.map((item) => item.id));
+      setSearchResults((current) =>
+        current.map((item) =>
+          checkedAppIds.has(item.id)
+            ? {
+                ...item,
+                manifestChecking: false,
+                manifestChecked: true,
+                manifestStatus: null,
+              }
+            : item,
+        ),
+      );
+    }
   }
 
   async function addSearchResult(item: SteamSearchResult) {
@@ -485,7 +560,7 @@ export default function App() {
         setHubcapQuota(null);
       }
 
-      setNotice({ page: "settings", text: "Hubcap Key 已保存。", kind: "success" });
+      setNotice({ page: "settings", text: "Key 已保存。", kind: "success" });
     } catch (error) {
       setHubcapQuota(null);
       setNotice({ page: "settings", text: String(error), kind: "error" });
@@ -581,6 +656,7 @@ export default function App() {
           hasLoadedState={hasLoadedState}
           hasSteamPath={Boolean(state?.settings.steamPath)}
           busy={busy}
+          isSearching={isSearching}
           onRefresh={refreshState}
           onCheckPackageUpdates={checkPackageUpdates}
           onImportFile={handleImportFile}

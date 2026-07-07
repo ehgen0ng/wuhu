@@ -71,6 +71,7 @@ export type SteamSearchResult = {
   tinyImage: string | null;
   price: SteamSearchPrice | null;
   platforms: SteamSearchPlatforms | null;
+  manifestChecking?: boolean;
   manifestStatus?: HubcapManifestStatus | null;
   manifestChecked?: boolean;
 };
