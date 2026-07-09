@@ -26,6 +26,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }

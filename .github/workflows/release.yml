@@ -165,7 +165,9 @@ jobs:
         run: npm ci --prefer-offline --no-audit --fund=false
 
       - name: Compile macOS arm64 app
-        run: npm run tauri -- build --target aarch64-apple-darwin --no-sign --ci
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npm run tauri -- build --target aarch64-apple-darwin --bundles app --ci
 
       - name: Create release zip
         shell: bash
@@ -184,9 +186,41 @@ jobs:
             exit 1
           fi
 
-          mkdir -p artifact/wuhu release
-          ditto "$app_path" artifact/wuhu/wuhu.app
-          ditto -c -k --sequesterRsrc --keepParent artifact/wuhu "release/wuhu-${RELEASE_TAG}-macos-arm64.zip"
+          icon_file="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app_path/Contents/Info.plist")"
+          if [ "$icon_file" != "icon.icns" ]; then
+            echo "Unexpected CFBundleIconFile: $icon_file" >&2
+            exit 1
+          fi
+          if [ ! -f "$app_path/Contents/Resources/icon.icns" ]; then
+            echo "icon.icns not found in app bundle" >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          mkdir -p release
+          zip_path="$PWD/release/wuhu-${RELEASE_TAG}-macos-arm64.zip"
+          (
+            cd "$(dirname "$app_path")"
+            zip -qry -X --symlinks "$zip_path" "$(basename "$app_path")"
+          )
+
+          zip_list="$(unzip -l "release/wuhu-${RELEASE_TAG}-macos-arm64.zip")"
+          for forbidden_entry in "__MACOSX/" "/._" "._wuhu" "._Info.plist"; do
+            if [[ "$zip_list" == *"$forbidden_entry"* ]]; then
+              echo "Unexpected metadata entry: $forbidden_entry" >&2
+              exit 1
+            fi
+          done
+          for required_entry in \
+            "wuhu.app/Contents/MacOS/wuhu" \
+            "wuhu.app/Contents/Resources/icon.icns" \
+            "wuhu.app/Contents/_CodeSignature/CodeResources"
+          do
+            if [[ "$zip_list" != *"$required_entry"* ]]; then
+              echo "Missing zip entry: $required_entry" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v6
