@@ -11,12 +11,14 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  windows:
-    name: Package Windows release
-    runs-on: windows-latest
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.notes.outputs.release_tag }}
 
     steps:
       - name: Checkout
@@ -24,41 +26,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Install npm dependencies
-        run: npm ci --prefer-offline --no-audit --fund=false
-
-      - name: Compile Windows app
-        run: npm run tauri -- build --no-bundle
-
-      - name: Create release zip
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path artifact\wuhu | Out-Null
-          New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item src-tauri\target\release\wuhu.exe artifact\wuhu\wuhu.exe -Force
-          Compress-Archive -Path artifact\* -DestinationPath release\wuhu.zip -Force
-
       - name: Prepare release notes
+        id: notes
         shell: bash
         run: |
           set -euo pipefail
@@ -69,10 +38,10 @@ jobs:
           elif [ -n "$manual_tag" ]; then
             tag="$manual_tag"
           else
-            version="$(node -p "require('./package.json').version")"
+            version="$(grep -m1 '"version"' package.json | sed -E 's/.*"version": "([^"]+)".*/\1/')"
             tag="v$version"
           fi
-          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
 
           target_ref="$GITHUB_SHA"
           if git rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null; then
@@ -98,15 +67,179 @@ jobs:
             echo "- ${subject} ([${short_sha}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${sha}))" > release-notes.md
           fi
 
-      - name: Publish release
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: 7
+
+  windows:
+    name: Package Windows x64
+    runs-on: windows-2025
+    needs: prepare
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-x64-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: |
+            windows-x64-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci --prefer-offline --no-audit --fund=false
+
+      - name: Compile Windows app
+        run: npm run tauri -- build --no-bundle
+
+      - name: Create release zip
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
-          $tag = $env:RELEASE_TAG
-          if (gh release view $tag 2>$null) {
-            gh release upload $tag release\wuhu.zip --clobber
-            gh release edit $tag --notes-file release-notes.md
-          } else {
-            gh release create $tag release\wuhu.zip --target $env:GITHUB_SHA --title $tag --notes-file release-notes.md
-          }
+          New-Item -ItemType Directory -Force -Path artifact\wuhu | Out-Null
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item src-tauri\target\release\wuhu.exe artifact\wuhu\wuhu.exe -Force
+          Compress-Archive -Path artifact\* -DestinationPath "release\wuhu-$env:RELEASE_TAG-windows-x64.zip" -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wuhu-windows-x64
+          path: release/wuhu-*-windows-x64.zip
+          retention-days: 7
+
+  macos-arm64:
+    name: Package macOS arm64
+    runs-on: macos-26
+    needs: prepare
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-arm64-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: |
+            macos-arm64-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci --prefer-offline --no-audit --fund=false
+
+      - name: Compile macOS arm64 app
+        run: npm run tauri -- build --target aarch64-apple-darwin --no-sign --ci
+
+      - name: Create release zip
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          app_path="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/wuhu.app"
+          if [ ! -d "$app_path" ]; then
+            app_path="src-tauri/target/release/bundle/macos/wuhu.app"
+          fi
+          if [ ! -d "$app_path" ]; then
+            echo "wuhu.app not found" >&2
+            find src-tauri/target -maxdepth 6 -name "wuhu.app" -print >&2
+            exit 1
+          fi
+
+          mkdir -p artifact/wuhu release
+          ditto "$app_path" artifact/wuhu/wuhu.app
+          ditto -c -k --sequesterRsrc --keepParent artifact/wuhu "release/wuhu-${RELEASE_TAG}-macos-arm64.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wuhu-macos-arm64
+          path: release/wuhu-*-macos-arm64.zip
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs:
+      - prepare
+      - windows
+      - macos-arm64
+
+    steps:
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wuhu-windows-x64
+          path: release
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wuhu-macos-arm64
+          path: release
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          files=(
+            "release/wuhu-${RELEASE_TAG}-windows-x64.zip"
+            "release/wuhu-${RELEASE_TAG}-macos-arm64.zip"
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --notes-file release/release-notes.md
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes-file release/release-notes.md
+          fi
