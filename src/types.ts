@@ -31,11 +31,22 @@ export type SteamClientStatus = {
 export type AppState = {
   settings: AppSettings;
   packages: PackageItem[];
+  tickets: TicketItem[];
   installStatus: InstallStatus;
   steamClient: SteamClientStatus;
 };
 
-export type Page = "packages" | "settings";
+export type TicketItem = {
+  appId: number;
+  title: string;
+  hasAppTicket: boolean;
+  hasETicket: boolean;
+  extractedAt: number;
+  expiresAt?: number | null;
+  sourceFileName?: string | null;
+};
+
+export type Page = "packages" | "tickets" | "settings";
 
 export type NoticeKind = "info" | "success" | "warning" | "error";
 

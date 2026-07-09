@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct AppStore {
     pub(crate) settings: AppSettings,
     pub(crate) packages: Vec<PackageItem>,
+    #[serde(default)]
+    pub(crate) tickets: Vec<TicketItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -37,11 +39,25 @@ pub(crate) struct PackageItem {
     pub(crate) image_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TicketItem {
+    pub(crate) app_id: u32,
+    pub(crate) title: String,
+    pub(crate) has_app_ticket: bool,
+    pub(crate) has_e_ticket: bool,
+    pub(crate) extracted_at: u64,
+    pub(crate) expires_at: Option<u64>,
+    #[serde(default)]
+    pub(crate) source_file_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppState {
     pub(crate) settings: AppSettings,
     pub(crate) packages: Vec<PackageItem>,
+    pub(crate) tickets: Vec<TicketItem>,
     pub(crate) install_status: InstallStatus,
     pub(crate) steam_client: SteamClientStatus,
 }

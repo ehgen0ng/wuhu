@@ -10,6 +10,7 @@ mod search;
 mod state;
 mod steam;
 mod store;
+mod tickets;
 
 use models::{AppRelease, AppState, HubcapQuota, ManifestStatus, SteamSearchItem};
 use state::build_state;
@@ -193,6 +194,30 @@ fn delete_package(app: AppHandle, id: String) -> Result<AppState, String> {
 }
 
 #[tauri::command]
+fn extract_ticket(app: AppHandle, app_id: u32, title: String) -> Result<AppState, String> {
+    tickets::extract_ticket(&app, app_id, title)
+}
+
+#[tauri::command]
+fn import_tickets_txt(
+    app: AppHandle,
+    file_name: String,
+    data_base64: String,
+) -> Result<AppState, String> {
+    tickets::import_tickets_txt(&app, file_name, data_base64)
+}
+
+#[tauri::command]
+fn export_tickets_txt(app: AppHandle, app_id: u32, path: String) -> Result<(), String> {
+    tickets::export_tickets_txt(&app, app_id, path)
+}
+
+#[tauri::command]
+fn delete_ticket(app: AppHandle, app_id: u32) -> Result<AppState, String> {
+    tickets::delete_ticket(&app, app_id)
+}
+
+#[tauri::command]
 fn install_opensteamtool(_app: AppHandle) -> Result<AppState, String> {
     let store = load_store()?;
     steam::install_opensteamtool(&store)?;
@@ -251,6 +276,10 @@ pub fn run() {
             update_remote_manifest,
             set_package_enabled,
             delete_package,
+            extract_ticket,
+            import_tickets_txt,
+            export_tickets_txt,
+            delete_ticket,
             install_opensteamtool,
             restore_opensteamtool,
             set_steam_client_version_locked,

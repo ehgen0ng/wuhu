@@ -1,9 +1,10 @@
 use std::{fs, path::Path};
 
 use crate::{
-    models::{AppStore, PackageItem},
+    models::{AppStore, PackageItem, TicketItem},
     steam,
     store::portable_data_dir,
+    tickets,
 };
 
 pub(crate) fn reconcile_with_steam(store: &mut AppStore) -> Result<bool, String> {
@@ -16,9 +17,10 @@ pub(crate) fn reconcile_with_steam(store: &mut AppStore) -> Result<bool, String>
     }
 
     let app_root = portable_data_dir()?;
+    let tickets = store.tickets.clone();
     let mut changed = false;
     for package in &mut store.packages {
-        let actual_enabled = package_matches_steam(&app_root, steam_root, package);
+        let actual_enabled = package_matches_steam(&app_root, steam_root, &tickets, package);
         if package.enabled != actual_enabled {
             package.enabled = actual_enabled;
             changed = true;
@@ -36,10 +38,24 @@ pub(super) fn sync_package_enabled(store: &AppStore, package: &PackageItem) -> R
     let root = portable_data_dir()?;
 
     if package.enabled {
-        apply_package(&root, steam_root, package)
+        apply_package(&root, steam_root, package, &store.tickets)
     } else {
         remove_active_package(steam_root, package)
     }
+}
+
+pub(crate) fn sync_enabled_packages_for_app_id(
+    store: &AppStore,
+    app_id: u32,
+) -> Result<(), String> {
+    for package in store
+        .packages
+        .iter()
+        .filter(|package| package.enabled && package.app_id == Some(app_id))
+    {
+        sync_package_enabled(store, package)?;
+    }
+    Ok(())
 }
 
 pub(super) fn remove_existing_package(
@@ -78,14 +94,21 @@ fn set_all_packages_enabled(store: &mut AppStore, enabled: bool) -> bool {
     changed
 }
 
-fn package_matches_steam(app_root: &Path, steam_root: &Path, package: &PackageItem) -> bool {
+fn package_matches_steam(
+    app_root: &Path,
+    steam_root: &Path,
+    tickets: &[TicketItem],
+    package: &PackageItem,
+) -> bool {
     let package_dir = app_root.join("packages").join(&package.id);
-    let local_lua = package_dir.join("source.lua");
     let steam_lua = steam_root
         .join("config")
         .join("lua")
         .join(&package.lua_file_name);
-    if !files_match(&local_lua, &steam_lua) {
+    let Ok(expected_lua) = render_package_lua(app_root, package, tickets) else {
+        return false;
+    };
+    if !file_matches_bytes(&expected_lua, &steam_lua) {
         return false;
     }
 
@@ -98,6 +121,17 @@ fn package_matches_steam(app_root: &Path, steam_root: &Path, package: &PackageIt
     }
 
     true
+}
+
+fn file_matches_bytes(expected: &[u8], actual: &Path) -> bool {
+    let Ok(actual_meta) = fs::metadata(actual) else {
+        return false;
+    };
+    if actual_meta.len() != expected.len() as u64 {
+        return false;
+    }
+
+    matches!(fs::read(actual), Ok(actual_bytes) if actual_bytes == expected)
 }
 
 fn files_match(expected: &Path, actual: &Path) -> bool {
@@ -117,19 +151,23 @@ fn files_match(expected: &Path, actual: &Path) -> bool {
     }
 }
 
-fn apply_package(app_root: &Path, steam_root: &Path, package: &PackageItem) -> Result<(), String> {
+fn apply_package(
+    app_root: &Path,
+    steam_root: &Path,
+    package: &PackageItem,
+    tickets: &[TicketItem],
+) -> Result<(), String> {
     let lua_dir = steam_root.join("config").join("lua");
     let depotcache_dir = steam_root.join("depotcache");
     fs::create_dir_all(&lua_dir).map_err(|err| format!("创建 Lua 目录失败：{err}"))?;
     fs::create_dir_all(&depotcache_dir)
         .map_err(|err| format!("创建 depotcache 目录失败：{err}"))?;
 
-    let package_dir = app_root.join("packages").join(&package.id);
-    let lua = fs::read(package_dir.join("source.lua"))
-        .map_err(|err| format!("读取 {} 的 Lua 失败：{err}", package.title))?;
+    let lua = render_package_lua(app_root, package, tickets)?;
     fs::write(lua_dir.join(&package.lua_file_name), lua)
         .map_err(|err| format!("写入启用 Lua 失败：{err}"))?;
 
+    let package_dir = app_root.join("packages").join(&package.id);
     for manifest_name in &package.manifest_files {
         let source = package_dir.join("manifests").join(manifest_name);
         let target = depotcache_dir.join(manifest_name);
@@ -138,6 +176,33 @@ fn apply_package(app_root: &Path, steam_root: &Path, package: &PackageItem) -> R
     }
 
     Ok(())
+}
+
+fn render_package_lua(
+    app_root: &Path,
+    package: &PackageItem,
+    ticket_items: &[TicketItem],
+) -> Result<Vec<u8>, String> {
+    let package_dir = app_root.join("packages").join(&package.id);
+    let mut lua = fs::read_to_string(package_dir.join("source.lua"))
+        .map_err(|err| format!("读取 {} 的 Lua 失败：{err}", package.title))?;
+
+    if let Some(app_id) = package.app_id {
+        if ticket_items.iter().any(|ticket| ticket.app_id == app_id) {
+            if let Some(ticket_lua) = tickets::lua_for_app_id(app_id)? {
+                if !lua.ends_with('\n') {
+                    lua.push('\n');
+                }
+                if !lua.ends_with("\n\n") {
+                    lua.push('\n');
+                }
+                lua.push_str(&ticket_lua);
+                lua.push('\n');
+            }
+        }
+    }
+
+    Ok(lua.into_bytes())
 }
 
 fn remove_active_lua(steam_root: &Path, package: &PackageItem) -> Result<(), String> {

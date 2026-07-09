@@ -1,13 +1,17 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import {
   addRemoteManifest,
   deletePackage as deletePackageCommand,
+  deleteTicket as deleteTicketCommand,
   detectSteamPath as detectSteamPathCommand,
+  exportTicketsTxt,
+  extractTicket as extractTicketCommand,
   getHubcapQuota,
   getInitialState,
   getLatestAppRelease,
   importPackageFromBytes,
+  importTicketsTxt,
   installOpenSteamTool,
   restoreOpenSteamTool,
   setDepotboxApiKey,
@@ -21,6 +25,7 @@ import { buildPackageUpdateCheck, canAddManifest } from "../domain/manifest";
 import { enrichPackageMetadata } from "../domain/packageMetadata";
 import { PackagesPage } from "../features/packages/PackagesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { TicketsPage } from "../features/tickets/TicketsPage";
 import { createGameSearchSources } from "../integrations/gameSearch";
 import { fetchPreferredManifestStatuses, hasConfiguredManifestSource } from "../integrations/manifests";
 import { arrayBufferToBase64 } from "../lib/file";
@@ -34,6 +39,7 @@ import type {
   Page,
   PackageItem,
   SteamSearchResult,
+  TicketItem,
 } from "../types";
 import { AppLayout } from "./AppLayout";
 import { APP_VERSION, isVersionNewer, waitForTauriRuntime } from "./runtime";
@@ -59,6 +65,7 @@ export default function App() {
   const stateApplyVersion = useRef(0);
 
   const packages = state?.packages ?? [];
+  const tickets = state?.tickets ?? [];
   const hasLoadedState = state !== null;
   const manifestSettings = state?.settings ?? {
     steamPath: steamPathInput || null,
@@ -192,8 +199,9 @@ export default function App() {
     action: () => Promise<AppState | void>,
     success?: string | ((state: AppState | void) => string),
     pending?: string,
+    visual = false,
   ) {
-    if (!beginAction(label)) return;
+    if (!beginAction(label, visual)) return;
     try {
       if (pending) {
         setNotice({ page: noticePage, text: pending, kind: "info" });
@@ -212,7 +220,7 @@ export default function App() {
     } catch (error) {
       setNotice({ page: noticePage, text: String(error), kind: "error" });
     } finally {
-      endAction(label);
+      endAction(label, visual);
     }
   }
 
@@ -232,6 +240,22 @@ export default function App() {
           : "已导入清单，已保存到本地；设置 Steam 路径后可启用。",
     );
     setPackageUpdateChecks({});
+  }
+
+  async function handleImportTicketsFile(file: File | null) {
+    if (!file) return;
+
+    await runAction(
+      "import-ticket",
+      "tickets",
+      async () => {
+        const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
+        return importTicketsTxt(file.name, dataBase64);
+      },
+      "已导入 tickets.txt。",
+      undefined,
+      true,
+    );
   }
 
   async function searchSteamGames(event: React.FormEvent<HTMLFormElement>) {
@@ -430,6 +454,67 @@ export default function App() {
     } finally {
       endAction(label, true);
     }
+  }
+
+  async function extractTicketByAppId() {
+    const input = window.prompt("请输入 AppID");
+    if (!input) return;
+
+    const appId = Number(input.trim());
+    if (!Number.isInteger(appId) || appId <= 0) {
+      setNotice({ page: "tickets", text: "AppID 必须是正整数。", kind: "warning" });
+      return;
+    }
+
+    const title =
+      packages.find((pkg) => pkg.appId === appId)?.title ??
+      tickets.find((ticket) => ticket.appId === appId)?.title ??
+      appId.toString();
+
+    await runAction(
+      "extract-ticket",
+      "tickets",
+      () => extractTicketCommand(appId, title),
+      `已提取 ${title} 的 ticket。`,
+      `正在提取 ${title} 的 ticket，请确认 Steam 正在运行并已登录。`,
+      true,
+    );
+  }
+
+  async function exportTicket(ticket: TicketItem) {
+    try {
+      const path = await save({
+        title: "导出 tickets.txt",
+        defaultPath: `${ticket.appId}.tickets.txt`,
+        filters: [{ name: "tickets.txt", extensions: ["txt"] }],
+      });
+      if (!path) return;
+
+      await runAction(
+        `export-ticket-${ticket.appId}`,
+        "tickets",
+        () => exportTicketsTxt(ticket.appId, path),
+        "已导出 tickets.txt。",
+        undefined,
+        true,
+      );
+    } catch (error) {
+      setNotice({ page: "tickets", text: String(error), kind: "error" });
+    }
+  }
+
+  async function deleteTicket(ticket: TicketItem) {
+    const confirmed = window.confirm(`确定删除「${ticket.title}」的 ticket 吗？`);
+    if (!confirmed) return;
+
+    await runAction(
+      `delete-ticket-${ticket.appId}`,
+      "tickets",
+      () => deleteTicketCommand(ticket.appId),
+      "已删除 ticket。",
+      undefined,
+      true,
+    );
   }
 
   async function checkPackageUpdates() {
@@ -645,6 +730,19 @@ export default function App() {
           onUpdatePackage={updatePackage}
           onTogglePackage={togglePackage}
           onDeletePackage={deletePackage}
+        />
+      ) : page === "tickets" ? (
+        <TicketsPage
+          notice={notice}
+          tickets={tickets}
+          hasLoadedState={hasLoadedState}
+          hasSteamPath={Boolean(state?.settings.steamPath)}
+          busy={busy}
+          onExtract={extractTicketByAppId}
+          onRefresh={refreshState}
+          onImport={handleImportTicketsFile}
+          onExport={exportTicket}
+          onDelete={deleteTicket}
         />
       ) : (
         <SettingsPage

@@ -57,6 +57,22 @@ export function deletePackage(id: string) {
   return call<AppState>("delete_package", { id });
 }
 
+export function extractTicket(appId: number, title: string) {
+  return call<AppState>("extract_ticket", { appId, title });
+}
+
+export function importTicketsTxt(fileName: string, dataBase64: string) {
+  return call<AppState>("import_tickets_txt", { fileName, dataBase64 });
+}
+
+export function exportTicketsTxt(appId: number, path: string) {
+  return call<void>("export_tickets_txt", { appId, path });
+}
+
+export function deleteTicket(appId: number) {
+  return call<AppState>("delete_ticket", { appId });
+}
+
 export function installOpenSteamTool() {
   return call<AppState>("install_opensteamtool");
 }

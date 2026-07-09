@@ -19,6 +19,7 @@ mod sync;
 pub(crate) use archive::import_archive;
 pub(crate) use metadata::{normalize_optional_text, normalize_title};
 pub(crate) use sync::reconcile_with_steam;
+pub(crate) use sync::sync_enabled_packages_for_app_id;
 
 pub(crate) fn add_steam_game(
     _app: &AppHandle,

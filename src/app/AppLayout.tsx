@@ -1,5 +1,5 @@
 import { AppShell, Box, Group, Image, NavLink, Stack, Text, ThemeIcon } from "@mantine/core";
-import { Archive, Settings } from "lucide-react";
+import { Archive, KeyRound, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import appIcon from "../assets/icon.png";
 import type { Page } from "../types";
@@ -29,6 +29,14 @@ export function AppLayout({ page, installed, hasLoadedState, onPageChange, child
               label="清单管理"
               leftSection={<Archive size={19} />}
               onClick={() => onPageChange("packages")}
+              variant="light"
+            />
+            <NavLink
+              active={page === "tickets"}
+              className="app-nav-link"
+              label="D 加密管理"
+              leftSection={<KeyRound size={19} />}
+              onClick={() => onPageChange("tickets")}
               variant="light"
             />
             <NavLink

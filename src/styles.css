@@ -168,6 +168,78 @@ button:disabled {
   padding-top: 26px;
 }
 
+.ticket-table-wrap {
+  overflow: hidden;
+  border: 1px solid rgba(102, 192, 244, 0.14);
+  border-radius: 8px;
+  background: #162433;
+}
+
+.ticket-table {
+  table-layout: fixed;
+}
+
+.ticket-table th {
+  color: #a8bacd;
+  font-size: 12px;
+  letter-spacing: 0;
+  background: rgba(7, 16, 24, 0.42);
+}
+
+.ticket-table td,
+.ticket-table th {
+  border-color: rgba(143, 188, 221, 0.1);
+}
+
+.ticket-table th:nth-child(1),
+.ticket-table td:nth-child(1) {
+  width: 32%;
+}
+
+.ticket-table th:nth-child(2),
+.ticket-table td:nth-child(2) {
+  width: 108px;
+}
+
+.ticket-table th:nth-child(3),
+.ticket-table td:nth-child(3),
+.ticket-table th:nth-child(4),
+.ticket-table td:nth-child(4) {
+  width: 92px;
+}
+
+.ticket-table th:nth-child(5),
+.ticket-table td:nth-child(5) {
+  width: 132px;
+}
+
+.ticket-table th:nth-child(6),
+.ticket-table td:nth-child(6) {
+  width: 168px;
+}
+
+.ticket-actions-head {
+  text-align: right !important;
+}
+
+.ticket-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-mark {
+  display: block;
+}
+
+.ticket-mark--ok {
+  color: #65d28a;
+}
+
+.ticket-mark--missing {
+  color: #708193;
+}
+
 .game-art {
   position: relative;
   overflow: hidden;

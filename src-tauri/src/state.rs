@@ -9,5 +9,6 @@ pub(crate) fn build_state(store: AppStore) -> Result<AppState, String> {
         steam_client: steam::client_status(&store),
         settings: store.settings,
         packages: store.packages,
+        tickets: store.tickets,
     })
 }
