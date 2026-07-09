@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
+use std::{ffi::OsStr, fs, path::Path};
 use tauri::AppHandle;
 
 mod manifests;
@@ -20,6 +21,15 @@ use store::{load_store, save_store};
 fn get_initial_state(_app: AppHandle) -> Result<AppState, String> {
     let mut store = load_store()?;
     let mut changed = false;
+
+    if let Some(path) = store.settings.steam_path.clone() {
+        let normalized = steam::normalize_path(&path);
+        if normalized != store.settings.steam_path {
+            store.settings.steam_path = normalized;
+            changed = true;
+        }
+    }
+
     if store.settings.steam_path.is_none() {
         store.settings.steam_path = steam::detect_path();
         changed = store.settings.steam_path.is_some();
@@ -44,7 +54,10 @@ fn set_steam_path(_app: AppHandle, path: String) -> Result<AppState, String> {
     let next_path = if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(
+            steam::normalize_path(trimmed)
+                .ok_or_else(|| "Steam 路径无法识别，请选择 Steam 根目录或 Steam.app".to_string())?,
+        )
     };
     let path_changed = previous_path != next_path;
     store.settings.steam_path = next_path;
@@ -68,6 +81,14 @@ fn import_package_from_bytes(
     let bytes = general_purpose::STANDARD
         .decode(data_base64)
         .map_err(|err| format!("zip 数据解码失败：{err}"))?;
+    packages::import_archive(&app, file_name, bytes, None, None, None, None, None, true)
+}
+
+#[tauri::command]
+fn import_package_from_path(app: AppHandle, path: String) -> Result<AppState, String> {
+    let path = Path::new(&path);
+    let file_name = file_name_from_path(path)?;
+    let bytes = fs::read(path).map_err(|err| format!("读取清单文件失败：{err}"))?;
     packages::import_archive(&app, file_name, bytes, None, None, None, None, None, true)
 }
 
@@ -208,6 +229,11 @@ fn import_tickets_txt(
 }
 
 #[tauri::command]
+fn import_tickets_txt_from_path(app: AppHandle, path: String) -> Result<AppState, String> {
+    tickets::import_tickets_txt_from_path(&app, path)
+}
+
+#[tauri::command]
 fn export_tickets_txt(app: AppHandle, app_id: u32, path: String) -> Result<(), String> {
     tickets::export_tickets_txt(&app, app_id, path)
 }
@@ -243,6 +269,14 @@ async fn search_steam_games(query: String) -> Result<Vec<SteamSearchItem>, Strin
     search::search_steam_games(query).await
 }
 
+fn file_name_from_path(path: &Path) -> Result<String, String> {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .filter(|file_name| !file_name.trim().is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "文件名无效".to_string())
+}
+
 #[tauri::command]
 async fn search_steam_suggest_games(query: String) -> Result<Vec<SteamSearchItem>, String> {
     search::search_steam_suggest_games(query).await
@@ -266,6 +300,7 @@ pub fn run() {
             detect_steam_path,
             set_steam_path,
             import_package_from_bytes,
+            import_package_from_path,
             set_hubcap_api_key,
             set_depotbox_api_key,
             check_hubcap_manifest_statuses,
@@ -278,6 +313,7 @@ pub fn run() {
             delete_package,
             extract_ticket,
             import_tickets_txt,
+            import_tickets_txt_from_path,
             export_tickets_txt,
             delete_ticket,
             install_opensteamtool,

@@ -77,6 +77,12 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const hasSteamPath = Boolean(state?.settings.steamPath);
   const hasSavedHubcapKey = Boolean(state?.settings.hubcapApiKey?.trim());
+  const componentInstallSupported = Boolean(state?.installStatus.supported);
+  const componentStatus = componentInstallSupported
+    ? state?.installStatus.installed
+      ? "已安装"
+      : "未安装"
+    : "不支持当前系统";
 
   return (
     <section className="page settings-page">
@@ -89,7 +95,7 @@ export function SettingsPage({
           <TextInput
             value={steamPathInput}
             onChange={(event) => onSteamPathChange(event.currentTarget.value)}
-            placeholder="Steam 根目录"
+            placeholder="Steam 根目录或 Steam.app"
             className="grow-control"
           />
           <Button
@@ -172,7 +178,7 @@ export function SettingsPage({
       </SettingSection>
 
       <SettingSection icon={Wrench} title="组件安装">
-        <InfoTile label="当前状态" value={state?.installStatus.installed ? "已安装" : "未安装"} />
+        <InfoTile label="当前状态" value={componentStatus} />
 
         <Group mt="md" gap="sm">
           <Button
@@ -181,7 +187,7 @@ export function SettingsPage({
             c="#06121e"
             leftSection={<CheckCircle2 size={18} />}
             onClick={onInstallOpenSteamTool}
-            disabled={!hasSteamPath}
+            disabled={!componentInstallSupported || !hasSteamPath}
           >
             安装
           </Button>
@@ -189,7 +195,7 @@ export function SettingsPage({
             color="red"
             variant="subtle"
             onClick={onRestoreOpenSteamTool}
-            disabled={!state?.installStatus.installed}
+            disabled={!componentInstallSupported || !state?.installStatus.installed}
           >
             恢复
           </Button>
@@ -209,7 +215,7 @@ export function SettingsPage({
             action={
               <Switch
                 checked={Boolean(state?.steamClient.locked)}
-                disabled={!hasSteamPath}
+                disabled={!componentInstallSupported || !hasSteamPath}
                 thumbIcon={null}
                 title={state?.steamClient.locked ? "取消锁定" : "锁定"}
                 aria-label={state?.steamClient.locked ? "取消锁定 Steam 客户端版本" : "锁定 Steam 客户端版本"}

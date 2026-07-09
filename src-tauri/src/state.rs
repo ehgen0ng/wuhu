@@ -6,6 +6,7 @@ use crate::{
 pub(crate) fn build_state(store: AppStore) -> Result<AppState, String> {
     Ok(AppState {
         install_status: steam::install_status(&store),
+        package_sync_supported: steam::supports_package_sync(),
         steam_client: steam::client_status(&store),
         settings: store.settings,
         packages: store.packages,

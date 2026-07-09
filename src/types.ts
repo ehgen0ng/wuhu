@@ -20,6 +20,7 @@ export type AppSettings = {
 
 export type InstallStatus = {
   installed: boolean;
+  supported: boolean;
 };
 
 export type SteamClientStatus = {
@@ -33,6 +34,7 @@ export type AppState = {
   packages: PackageItem[];
   tickets: TicketItem[];
   installStatus: InstallStatus;
+  packageSyncSupported: boolean;
   steamClient: SteamClientStatus;
 };
 

@@ -36,7 +36,7 @@ pub(crate) fn add_steam_game(
 
     let mut store = load_store()?;
     let root = portable_data_dir()?;
-    let should_enable = steam::configured_path(&store).is_some();
+    let should_enable = steam::package_sync_root(&store).is_some();
     sync::remove_existing_package(&mut store, &package_id)?;
 
     let package_dir = root.join("packages").join(&package_id);
@@ -71,7 +71,11 @@ pub(crate) fn add_steam_game(
 
 pub(crate) fn set_enabled(_app: &AppHandle, id: String, enabled: bool) -> Result<AppState, String> {
     let mut store = load_store()?;
-    let next_enabled = enabled && steam::configured_path(&store).is_some();
+    if enabled && !steam::supports_package_sync() {
+        return Err("清单启用目前只支持 Windows Steam 客户端".to_string());
+    }
+
+    let next_enabled = enabled && steam::package_sync_root(&store).is_some();
     let package = store
         .packages
         .iter_mut()

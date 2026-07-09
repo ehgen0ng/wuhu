@@ -1,17 +1,23 @@
 use std::{
-    fs,
+    env,
     path::{Path, PathBuf},
 };
 
+#[cfg(windows)]
+use std::fs;
+
 use crate::models::{AppStore, InstallStatus, SteamClientStatus};
 
+#[cfg(windows)]
 const DLL_NAMES: [&str; 3] = ["dwmapi.dll", "xinput1_4.dll", "OpenSteamTool.dll"];
 
+#[cfg(windows)]
 struct EmbeddedToolFile {
     name: &'static str,
     bytes: &'static [u8],
 }
 
+#[cfg(windows)]
 const EMBEDDED_TOOL_FILES: [EmbeddedToolFile; 3] = [
     EmbeddedToolFile {
         name: "dwmapi.dll",
@@ -28,118 +34,313 @@ const EMBEDDED_TOOL_FILES: [EmbeddedToolFile; 3] = [
 ];
 
 pub(crate) fn detect_path() -> Option<String> {
+    detect_path_candidates()
+        .into_iter()
+        .find_map(|path| normalize_root_path(&path))
+        .and_then(|path| path_to_string(&path))
+}
+
+#[cfg(windows)]
+fn detect_path_candidates() -> Vec<PathBuf> {
     let candidates = [r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam"];
 
+    candidates.iter().map(PathBuf::from).collect()
+}
+
+#[cfg(target_os = "macos")]
+fn detect_path_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(root) = default_macos_data_root() {
+        candidates.push(root);
+    }
+    candidates.push(PathBuf::from("/Applications/Steam.app"));
+    if let Some(home) = home_dir() {
+        candidates.push(home.join("Applications").join("Steam.app"));
+    }
     candidates
-        .iter()
-        .find(|path| looks_like_root(Path::new(path)))
-        .map(|path| path.to_string())
 }
 
-pub(crate) fn looks_like_root(path: &Path) -> bool {
-    path.join("steam.exe").exists() || path.join("Steam.exe").exists()
+#[cfg(not(any(windows, target_os = "macos")))]
+fn detect_path_candidates() -> Vec<PathBuf> {
+    Vec::new()
 }
 
-pub(crate) fn configured_path(store: &AppStore) -> Option<&str> {
+pub(crate) fn normalize_path(path: &str) -> Option<String> {
+    normalize_root_path(&input_path(path)?).and_then(|path| path_to_string(&path))
+}
+
+pub(crate) fn configured_root(store: &AppStore) -> Option<PathBuf> {
     store
         .settings
         .steam_path
         .as_deref()
         .map(str::trim)
         .filter(|path| !path.is_empty())
+        .and_then(|path| normalize_root_path(&input_path(path)?))
+}
+
+pub(crate) fn supports_package_sync() -> bool {
+    cfg!(windows)
+}
+
+pub(crate) fn package_sync_root(store: &AppStore) -> Option<PathBuf> {
+    supports_package_sync()
+        .then(|| configured_root(store))
+        .flatten()
+}
+
+fn input_path(path: &str) -> Option<PathBuf> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed == "~" {
+        return home_dir();
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return home_dir().map(|home| home.join(rest));
+    }
+
+    Some(PathBuf::from(trimmed))
+}
+
+fn path_to_string(path: &Path) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(path) = home_relative_path(path) {
+            return Some(path);
+        }
+    }
+
+    path.to_str().map(ToString::to_string)
+}
+
+#[cfg(target_os = "macos")]
+fn home_relative_path(path: &Path) -> Option<String> {
+    let home = home_dir()?;
+    if path == home.as_path() {
+        return Some("~".to_string());
+    }
+
+    let rest = path.strip_prefix(&home).ok()?;
+    let rest = rest.to_str()?;
+    if rest.is_empty() {
+        Some("~".to_string())
+    } else {
+        Some(format!("~/{rest}"))
+    }
+}
+
+#[cfg(windows)]
+fn normalize_root_path(path: &Path) -> Option<PathBuf> {
+    if windows_looks_like_root(path) {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn windows_looks_like_root(path: &Path) -> bool {
+    path.join("steam.exe").exists() || path.join("Steam.exe").exists()
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_root_path(path: &Path) -> Option<PathBuf> {
+    if macos_looks_like_data_root(path) {
+        return Some(path.to_path_buf());
+    }
+
+    if let Some(root) = macos_data_root_from_app_bundle_path(path) {
+        return Some(root);
+    }
+
+    if macos_looks_like_launcher_path(path) {
+        return default_macos_data_root().filter(|root| macos_looks_like_data_root(root));
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_looks_like_data_root(path: &Path) -> bool {
+    path.join("Steam.AppBundle")
+        .join("Steam")
+        .join("Contents")
+        .join("MacOS")
+        .join("steamclient.dylib")
+        .exists()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_data_root_from_app_bundle_path(path: &Path) -> Option<PathBuf> {
+    for ancestor in path.ancestors() {
+        if !file_name_eq(ancestor, "Steam.AppBundle") {
+            continue;
+        }
+
+        let root = ancestor.parent()?.to_path_buf();
+        if macos_looks_like_data_root(&root) {
+            return Some(root);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_looks_like_launcher_path(path: &Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        file_name_eq(ancestor, "Steam.app")
+            && ancestor
+                .join("Contents")
+                .join("MacOS")
+                .join("steam_osx")
+                .exists()
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn default_macos_data_root() -> Option<PathBuf> {
+    home_dir().map(|home| {
+        home.join("Library")
+            .join("Application Support")
+            .join("Steam")
+    })
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn normalize_root_path(_path: &Path) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn file_name_eq(path: &Path, expected: &str) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
 }
 
 pub(crate) fn install_opensteamtool(store: &AppStore) -> Result<(), String> {
-    let steam_path = store
-        .settings
-        .steam_path
-        .clone()
-        .ok_or_else(|| "请先设置 Steam 路径".to_string())?;
-    let steam_root = PathBuf::from(&steam_path);
-    if !looks_like_root(&steam_root) {
-        return Err("Steam 路径不像 Steam 根目录，请检查后再安装".to_string());
+    #[cfg(not(windows))]
+    {
+        let _ = store;
+        return Err("组件安装目前只支持 Windows Steam 客户端".to_string());
     }
 
-    for file_name in DLL_NAMES {
-        let target = steam_root.join(file_name);
-        let bytes = embedded_tool_file(file_name)
-            .ok_or_else(|| format!("内置资源缺少 {file_name}，请重新构建 wuhu"))?;
-        fs::write(&target, bytes).map_err(|err| format!("安装 {file_name} 失败：{err}"))?;
-    }
+    #[cfg(windows)]
+    {
+        let steam_root = configured_root(store).ok_or_else(|| "请先设置 Steam 路径".to_string())?;
 
-    Ok(())
+        for file_name in DLL_NAMES {
+            let target = steam_root.join(file_name);
+            let bytes = embedded_tool_file(file_name)
+                .ok_or_else(|| format!("内置资源缺少 {file_name}，请重新构建 wuhu"))?;
+            fs::write(&target, bytes).map_err(|err| format!("安装 {file_name} 失败：{err}"))?;
+        }
+
+        Ok(())
+    }
 }
 
 pub(crate) fn restore_opensteamtool(store: &AppStore) -> Result<(), String> {
-    let steam_path = store
-        .settings
-        .steam_path
-        .clone()
-        .ok_or_else(|| "请先设置 Steam 路径".to_string())?;
-    let steam_root = PathBuf::from(&steam_path);
-    if !looks_like_root(&steam_root) {
-        return Err("Steam 路径不像 Steam 根目录，请检查后再恢复".to_string());
+    #[cfg(not(windows))]
+    {
+        let _ = store;
+        return Err("组件恢复目前只支持 Windows Steam 客户端".to_string());
     }
 
-    let mut errors = Vec::new();
-    for file_name in DLL_NAMES {
-        if let Err(err) = remove_component_file(&steam_root.join(file_name), file_name) {
-            errors.push(err);
+    #[cfg(windows)]
+    {
+        let steam_root = configured_root(store).ok_or_else(|| "请先设置 Steam 路径".to_string())?;
+
+        let mut errors = Vec::new();
+        for file_name in DLL_NAMES {
+            if let Err(err) = remove_component_file(&steam_root.join(file_name), file_name) {
+                errors.push(err);
+            }
         }
-    }
-    if !errors.is_empty() {
-        return Err(errors.join("\n"));
-    }
+        if !errors.is_empty() {
+            return Err(errors.join("\n"));
+        }
 
-    Ok(())
+        Ok(())
+    }
 }
 
 pub(crate) fn set_client_version_locked(store: &AppStore, locked: bool) -> Result<(), String> {
-    let steam_path = store
-        .settings
-        .steam_path
-        .clone()
-        .ok_or_else(|| "请先设置 Steam 路径".to_string())?;
-    let steam_root = PathBuf::from(&steam_path);
-    if !looks_like_root(&steam_root) {
-        return Err("Steam 路径不像 Steam 根目录，请检查后再操作".to_string());
+    #[cfg(not(windows))]
+    {
+        let _ = (store, locked);
+        return Err("Steam 客户端版本锁定目前只支持 Windows Steam 客户端".to_string());
     }
 
-    set_client_lock_file(&steam_root, locked)
+    #[cfg(windows)]
+    {
+        let steam_root = configured_root(store).ok_or_else(|| "请先设置 Steam 路径".to_string())?;
+
+        set_client_lock_file(&steam_root, locked)
+    }
 }
 
 pub(crate) fn install_status(store: &AppStore) -> InstallStatus {
-    let installed = store
-        .settings
-        .steam_path
-        .as_deref()
-        .map(|path| {
-            DLL_NAMES
-                .iter()
-                .all(|name| Path::new(path).join(name).exists())
-        })
-        .unwrap_or(false);
+    #[cfg(not(windows))]
+    {
+        let _ = store;
+        return InstallStatus {
+            installed: false,
+            supported: false,
+        };
+    }
 
-    InstallStatus { installed }
+    #[cfg(windows)]
+    {
+        let installed = configured_root(store)
+            .map(|path| DLL_NAMES.iter().all(|name| path.join(name).exists()))
+            .unwrap_or(false);
+
+        InstallStatus {
+            installed,
+            supported: true,
+        }
+    }
 }
 
 pub(crate) fn client_status(store: &AppStore) -> SteamClientStatus {
-    let Some(steam_path) = store.settings.steam_path.as_deref() else {
+    #[cfg(not(windows))]
+    {
+        let _ = store;
         return SteamClientStatus {
             version: None,
             client_build_date: None,
             locked: false,
         };
-    };
-    let steam_root = Path::new(steam_path);
+    }
 
-    SteamClientStatus {
-        version: read_client_version(steam_root),
-        client_build_date: read_client_build_date(steam_root),
-        locked: is_client_locked(steam_root),
+    #[cfg(windows)]
+    {
+        let Some(steam_root) = configured_root(store) else {
+            return SteamClientStatus {
+                version: None,
+                client_build_date: None,
+                locked: false,
+            };
+        };
+
+        SteamClientStatus {
+            version: read_client_version(&steam_root),
+            client_build_date: read_client_build_date(&steam_root),
+            locked: is_client_locked(&steam_root),
+        }
     }
 }
 
+#[cfg(windows)]
 fn set_client_lock_file(steam_root: &Path, locked: bool) -> Result<(), String> {
     let config_path = steam_root.join("steam.cfg");
     let existing = if config_path.exists() {
@@ -173,6 +374,7 @@ fn set_client_lock_file(steam_root: &Path, locked: bool) -> Result<(), String> {
     })
 }
 
+#[cfg(windows)]
 fn remove_client_lock_lines(content: &str) -> Vec<String> {
     content
         .lines()
@@ -189,6 +391,7 @@ fn remove_client_lock_lines(content: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(windows)]
 fn is_client_locked(steam_root: &Path) -> bool {
     let Ok(content) = fs::read_to_string(steam_root.join("steam.cfg")) else {
         return false;
@@ -197,6 +400,7 @@ fn is_client_locked(steam_root: &Path) -> bool {
         && has_config_value(&content, "BootStrapperForceSelfUpdate", "disable")
 }
 
+#[cfg(windows)]
 fn has_config_value(content: &str, key: &str, expected: &str) -> bool {
     content.lines().any(|line| {
         let Some((left, right)) = line.split_once('=') else {
@@ -206,6 +410,7 @@ fn has_config_value(content: &str, key: &str, expected: &str) -> bool {
     })
 }
 
+#[cfg(windows)]
 fn read_client_version(steam_root: &Path) -> Option<String> {
     read_package_files(steam_root)
         .iter()
@@ -214,12 +419,14 @@ fn read_client_version(steam_root: &Path) -> Option<String> {
         .max_by_key(|value| value.parse::<u64>().ok())
 }
 
+#[cfg(windows)]
 fn read_client_build_date(steam_root: &Path) -> Option<u64> {
     read_pe_timestamp(&steam_root.join("steamui.dll"))
         .or_else(|| read_pe_timestamp(&steam_root.join("steamclient64.dll")))
         .or_else(|| read_package_build_timestamp(steam_root))
 }
 
+#[cfg(windows)]
 fn read_package_files(steam_root: &Path) -> [PathBuf; 4] {
     [
         steam_root
@@ -237,6 +444,7 @@ fn read_package_files(steam_root: &Path) -> [PathBuf; 4] {
     ]
 }
 
+#[cfg(windows)]
 fn read_package_build_timestamp(steam_root: &Path) -> Option<u64> {
     read_package_files(steam_root)
         .iter()
@@ -252,6 +460,7 @@ fn read_package_build_timestamp(steam_root: &Path) -> Option<u64> {
         .max()
 }
 
+#[cfg(windows)]
 fn parse_vdf_field(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -271,6 +480,7 @@ fn parse_vdf_field(content: &str, key: &str) -> Option<String> {
     None
 }
 
+#[cfg(windows)]
 fn read_pe_timestamp(path: &Path) -> Option<u64> {
     let data = fs::read(path).ok()?;
     if data.len() < 0x40 || &data[0..2] != b"MZ" {
@@ -288,10 +498,12 @@ fn read_pe_timestamp(path: &Path) -> Option<u64> {
     }
 }
 
+#[cfg(windows)]
 fn is_timestamp_like_value(timestamp: u64) -> bool {
     (1_262_304_000..=4_102_444_800).contains(&timestamp)
 }
 
+#[cfg(windows)]
 fn remove_component_file(target: &Path, file_name: &str) -> Result<(), String> {
     if !target.exists() {
         return Ok(());
@@ -308,6 +520,7 @@ fn remove_component_file(target: &Path, file_name: &str) -> Result<(), String> {
     })
 }
 
+#[cfg(windows)]
 fn embedded_tool_file(file_name: &str) -> Option<&'static [u8]> {
     EMBEDDED_TOOL_FILES
         .iter()

@@ -17,6 +17,10 @@ export function importPackageFromBytes(fileName: string, dataBase64: string) {
   return call<AppState>("import_package_from_bytes", { fileName, dataBase64 });
 }
 
+export function importPackageFromPath(path: string) {
+  return call<AppState>("import_package_from_path", { path });
+}
+
 export function setHubcapApiKey(apiKey: string) {
   return call<AppState>("set_hubcap_api_key", { apiKey });
 }
@@ -63,6 +67,10 @@ export function extractTicket(appId: number, title: string) {
 
 export function importTicketsTxt(fileName: string, dataBase64: string) {
   return call<AppState>("import_tickets_txt", { fileName, dataBase64 });
+}
+
+export function importTicketsTxtFromPath(path: string) {
+  return call<AppState>("import_tickets_txt_from_path", { path });
 }
 
 export function exportTicketsTxt(appId: number, path: string) {

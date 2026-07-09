@@ -8,19 +8,15 @@ use crate::{
 };
 
 pub(crate) fn reconcile_with_steam(store: &mut AppStore) -> Result<bool, String> {
-    let Some(steam_path) = store.settings.steam_path.as_deref() else {
+    let Some(steam_root) = steam::package_sync_root(store) else {
         return Ok(set_all_packages_enabled(store, false));
     };
-    let steam_root = Path::new(steam_path);
-    if !steam::looks_like_root(steam_root) {
-        return Ok(set_all_packages_enabled(store, false));
-    }
 
     let app_root = portable_data_dir()?;
     let tickets = store.tickets.clone();
     let mut changed = false;
     for package in &mut store.packages {
-        let actual_enabled = package_matches_steam(&app_root, steam_root, &tickets, package);
+        let actual_enabled = package_matches_steam(&app_root, &steam_root, &tickets, package);
         if package.enabled != actual_enabled {
             package.enabled = actual_enabled;
             changed = true;
@@ -31,16 +27,15 @@ pub(crate) fn reconcile_with_steam(store: &mut AppStore) -> Result<bool, String>
 }
 
 pub(super) fn sync_package_enabled(store: &AppStore, package: &PackageItem) -> Result<(), String> {
-    let Some(steam_path) = steam::configured_path(store) else {
+    let Some(steam_root) = steam::package_sync_root(store) else {
         return Ok(());
     };
-    let steam_root = Path::new(steam_path);
     let root = portable_data_dir()?;
 
     if package.enabled {
-        apply_package(&root, steam_root, package, &store.tickets)
+        apply_package(&root, &steam_root, package, &store.tickets)
     } else {
-        remove_active_package(steam_root, package)
+        remove_active_package(&steam_root, package)
     }
 }
 
@@ -68,8 +63,8 @@ pub(super) fn remove_existing_package(
         .find(|package| package.id == package_id)
         .cloned()
     {
-        if let Some(steam_path) = steam::configured_path(store) {
-            remove_active_package(Path::new(steam_path), &existing)?;
+        if let Some(steam_root) = steam::package_sync_root(store) {
+            remove_active_package(&steam_root, &existing)?;
         }
     }
 

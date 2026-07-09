@@ -59,6 +59,7 @@ pub(crate) struct AppState {
     pub(crate) packages: Vec<PackageItem>,
     pub(crate) tickets: Vec<TicketItem>,
     pub(crate) install_status: InstallStatus,
+    pub(crate) package_sync_supported: bool,
     pub(crate) steam_client: SteamClientStatus,
 }
 
@@ -66,6 +67,7 @@ pub(crate) struct AppState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InstallStatus {
     pub(crate) installed: bool,
+    pub(crate) supported: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -240,6 +240,47 @@ button:disabled {
   color: #708193;
 }
 
+.ticket-extract-modal {
+  overflow: hidden;
+  border: 1px solid rgba(102, 192, 244, 0.18);
+  background: #162433;
+  box-shadow: 0 20px 58px rgba(0, 0, 0, 0.36);
+}
+
+.ticket-extract-modal__header {
+  min-height: 60px;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid rgba(143, 188, 221, 0.1);
+  background: #162433;
+}
+
+.ticket-extract-modal__title {
+  color: #f5fbff;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.ticket-extract-modal__close {
+  color: #a8bacd;
+  border-radius: 8px;
+}
+
+.ticket-extract-modal__close:hover {
+  color: #f5fbff;
+  background: rgba(102, 192, 244, 0.1);
+}
+
+.ticket-extract-modal__body {
+  padding: 20px 22px 22px;
+  background: #162433;
+}
+
+.ticket-extract-modal__body label {
+  color: #a8bacd;
+  font-weight: 800;
+}
+
 .game-art {
   position: relative;
   overflow: hidden;

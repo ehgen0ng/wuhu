@@ -62,7 +62,7 @@ pub(crate) fn import_archive(
 
     let mut store = load_store()?;
     let root = portable_data_dir()?;
-    let should_enable = enabled && steam::configured_path(&store).is_some();
+    let should_enable = enabled && steam::package_sync_root(&store).is_some();
     if let Some(replace_id) = replace_package_id
         .as_deref()
         .map(str::trim)

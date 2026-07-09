@@ -2,17 +2,19 @@ import {
   ActionIcon,
   Box,
   Button,
-  FileButton,
   Group,
   Loader,
+  Modal,
   Stack,
   Table,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
   Tooltip,
 } from "@mantine/core";
 import { CheckCircle2, Download, KeyRound, RefreshCcw, Trash2, Upload, XCircle } from "lucide-react";
+import { type FormEvent, useState } from "react";
 import { NoticeAlert } from "../../components/NoticeAlert";
 import { PageHeader } from "../../components/PageHeader";
 import type { Notice, TicketItem } from "../../types";
@@ -23,9 +25,9 @@ type TicketsPageProps = {
   hasLoadedState: boolean;
   hasSteamPath: boolean;
   busy: string | null;
-  onExtract: () => void;
+  onExtract: (appId: number) => void;
   onRefresh: () => void;
-  onImport: (file: File | null) => void;
+  onImport: () => void;
   onExport: (ticket: TicketItem) => void;
   onDelete: (ticket: TicketItem) => void;
 };
@@ -42,13 +44,74 @@ export function TicketsPage({
   onExport,
   onDelete,
 }: TicketsPageProps) {
+  const [extractOpened, setExtractOpened] = useState(false);
+  const [extractAppId, setExtractAppId] = useState("");
+  const [extractError, setExtractError] = useState<string | null>(null);
   const isExtracting = busy === "extract-ticket";
   const isImporting = busy === "import-ticket";
   const isRefreshing = busy === "refresh";
   const rows = [...tickets].sort((left, right) => left.title.localeCompare(right.title, "zh-CN"));
 
+  function submitExtract(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const appId = Number(extractAppId.trim());
+    if (!Number.isInteger(appId) || appId <= 0) {
+      setExtractError("AppID 必须是正整数。");
+      return;
+    }
+
+    setExtractError(null);
+    setExtractOpened(false);
+    onExtract(appId);
+  }
+
   return (
     <Box component="section" className="page">
+      <Modal
+        centered
+        classNames={{
+          body: "ticket-extract-modal__body",
+          close: "ticket-extract-modal__close",
+          content: "ticket-extract-modal",
+          header: "ticket-extract-modal__header",
+          title: "ticket-extract-modal__title",
+        }}
+        opened={extractOpened}
+        overlayProps={{ backgroundOpacity: 0.58, blur: 3 }}
+        onClose={() => setExtractOpened(false)}
+        title="提取 Ticket"
+      >
+        <form onSubmit={submitExtract}>
+          <Stack gap="md">
+            <TextInput
+              autoFocus
+              label="AppID"
+              inputMode="numeric"
+              value={extractAppId}
+              error={extractError}
+              onChange={(event) => {
+                setExtractAppId(event.currentTarget.value);
+                setExtractError(null);
+              }}
+            />
+            <Group justify="flex-end" gap="sm">
+              <Button variant="subtle" onClick={() => setExtractOpened(false)}>
+                取消
+              </Button>
+              <Button
+                color="steam"
+                c="#06121e"
+                type="submit"
+                loading={isExtracting}
+                disabled={isExtracting}
+              >
+                提取
+              </Button>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
+
       <PageHeader
         title="D 加密管理"
         actions={
@@ -66,24 +129,21 @@ export function TicketsPage({
               leftSection={isExtracting ? <Loader color="steam" size={17} /> : <KeyRound size={17} />}
               disabled={!hasSteamPath || isExtracting}
               aria-busy={isExtracting}
-              onClick={onExtract}
+              onClick={() => setExtractOpened(true)}
             >
               提取
             </Button>
-            <FileButton onChange={onImport} accept=".txt">
-              {(props) => (
-                <Button
-                  {...props}
-                  color="steam"
-                  variant="filled"
-                  c="#06121e"
-                  leftSection={isImporting ? <Loader color="#06121e" size={17} /> : <Upload size={17} />}
-                  aria-busy={isImporting}
-                >
-                  导入Ticket
-                </Button>
-              )}
-            </FileButton>
+            <Button
+              color="steam"
+              variant="filled"
+              c="#06121e"
+              leftSection={isImporting ? <Loader color="#06121e" size={17} /> : <Upload size={17} />}
+              aria-busy={isImporting}
+              disabled={isImporting}
+              onClick={onImport}
+            >
+              导入Ticket
+            </Button>
           </>
         }
       />
@@ -139,10 +199,10 @@ export function TicketsPage({
                             {exportBusy ? <Loader color="steam" size={16} /> : <Download size={16} />}
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="删除 ticket">
+                        <Tooltip label="删除 Ticket">
                           <ActionIcon
                             variant="light"
-                            aria-label="删除 ticket"
+                            aria-label="删除 Ticket"
                             disabled={deleteBusy}
                             onClick={() => onDelete(ticket)}
                           >
@@ -164,7 +224,7 @@ export function TicketsPage({
               <KeyRound size={30} />
             </ThemeIcon>
             <Title order={2} size={22}>
-              还没有 ticket
+              还没有 Ticket
             </Title>
             <Text c="dimmed" size="sm">
               点击右上角提取，或导入已有 tickets.txt。

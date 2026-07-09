@@ -7,12 +7,29 @@ import type { Page } from "../types";
 type AppLayoutProps = {
   page: Page;
   installed: boolean;
+  installSupported: boolean;
   hasLoadedState: boolean;
   onPageChange: (page: Page) => void;
   children: ReactNode;
 };
 
-export function AppLayout({ page, installed, hasLoadedState, onPageChange, children }: AppLayoutProps) {
+export function AppLayout({
+  page,
+  installed,
+  installSupported,
+  hasLoadedState,
+  onPageChange,
+  children,
+}: AppLayoutProps) {
+  const statusText = hasLoadedState
+    ? installSupported
+      ? installed
+        ? "组件已安装"
+        : "等待安装组件"
+      : "组件不支持当前系统"
+    : "状态未读取";
+  const statusColor = installSupported ? (installed ? "green" : "red") : "gray";
+
   return (
     <AppShell navbar={{ width: 260, breakpoint: "sm" }} className="app-shell">
       <AppShell.Navbar className="app-navbar" p="lg">
@@ -50,9 +67,9 @@ export function AppLayout({ page, installed, hasLoadedState, onPageChange, child
           </Stack>
 
           <Group className="sidebar-footer" mt="auto" gap="sm">
-            <ThemeIcon color={installed ? "green" : "red"} radius="xl" size={12} variant="filled" />
+            <ThemeIcon color={statusColor} radius="xl" size={12} variant="filled" />
             <Text c="dimmed" size="sm">
-              {hasLoadedState ? (installed ? "组件已安装" : "等待安装组件") : "状态未读取"}
+              {statusText}
             </Text>
           </Group>
         </Stack>

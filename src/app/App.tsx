@@ -1,3 +1,4 @@
+import { downloadDir, homeDir, join } from "@tauri-apps/api/path";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -10,8 +11,8 @@ import {
   getHubcapQuota,
   getInitialState,
   getLatestAppRelease,
-  importPackageFromBytes,
-  importTicketsTxt,
+  importPackageFromPath,
+  importTicketsTxtFromPath,
   installOpenSteamTool,
   restoreOpenSteamTool,
   setDepotboxApiKey,
@@ -28,7 +29,6 @@ import { SettingsPage } from "../features/settings/SettingsPage";
 import { TicketsPage } from "../features/tickets/TicketsPage";
 import { createGameSearchSources } from "../integrations/gameSearch";
 import { fetchPreferredManifestStatuses, hasConfiguredManifestSource } from "../integrations/manifests";
-import { arrayBufferToBase64 } from "../lib/file";
 import { wait, waitForNextPaint } from "../lib/render";
 import type {
   AppState,
@@ -43,6 +43,39 @@ import type {
 } from "../types";
 import { AppLayout } from "./AppLayout";
 import { APP_VERSION, isVersionNewer, waitForTauriRuntime } from "./runtime";
+
+function packageSavedMessage(state: AppState | null | undefined | void, subject: string) {
+  if (state?.packageSyncSupported && state.settings.steamPath) return `${subject}。`;
+  if (state?.settings.steamPath) return `${subject}，已保存到本地；当前系统暂不支持启用清单。`;
+  return `${subject}，已保存到本地；设置 Windows Steam 路径后可启用。`;
+}
+
+function steamPathSavedMessage(_state: AppState | null | undefined | void) {
+  return "Steam 路径已保存。";
+}
+
+async function expandDialogDefaultPath(path: string | null | undefined) {
+  const trimmed = path?.trim();
+  if (!trimmed) return undefined;
+
+  if (trimmed === "~") return homeDir();
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    const home = await homeDir();
+    const separator = home.endsWith("/") || home.endsWith("\\") ? "" : "/";
+    return `${home}${separator}${trimmed.slice(2)}`;
+  }
+
+  return trimmed;
+}
+
+async function downloadsDefaultPath(fileName?: string) {
+  const dir = await downloadDir();
+  return fileName ? join(dir, fileName) : dir;
+}
+
+function selectedDialogPath(selected: string | string[] | null) {
+  return Array.isArray(selected) ? selected[0] : selected;
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>("packages");
@@ -224,38 +257,51 @@ export default function App() {
     }
   }
 
-  async function handleImportFile(file: File | null) {
-    if (!file) return;
+  async function handleImportFile() {
+    try {
+      const selected = await open({
+        title: "导入清单",
+        defaultPath: await downloadsDefaultPath(),
+        filters: [{ name: "ZIP", extensions: ["zip"] }],
+        multiple: false,
+      });
+      const path = selectedDialogPath(selected);
+      if (!path) return;
 
-    await runAction(
-      "import",
-      "packages",
-      async () => {
-        const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
-        return importPackageFromBytes(file.name, dataBase64);
-      },
-      (nextState) =>
-        nextState?.settings.steamPath
-          ? "已导入清单。"
-          : "已导入清单，已保存到本地；设置 Steam 路径后可启用。",
-    );
-    setPackageUpdateChecks({});
+      await runAction(
+        "import",
+        "packages",
+        () => importPackageFromPath(path),
+        (nextState) => packageSavedMessage(nextState, "已导入清单"),
+      );
+      setPackageUpdateChecks({});
+    } catch (error) {
+      setNotice({ page: "packages", text: String(error), kind: "error" });
+    }
   }
 
-  async function handleImportTicketsFile(file: File | null) {
-    if (!file) return;
+  async function handleImportTicketsFile() {
+    try {
+      const selected = await open({
+        title: "导入 tickets.txt",
+        defaultPath: await downloadsDefaultPath(),
+        filters: [{ name: "tickets.txt", extensions: ["txt"] }],
+        multiple: false,
+      });
+      const path = selectedDialogPath(selected);
+      if (!path) return;
 
-    await runAction(
-      "import-ticket",
-      "tickets",
-      async () => {
-        const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
-        return importTicketsTxt(file.name, dataBase64);
-      },
-      "已导入 tickets.txt。",
-      undefined,
-      true,
-    );
+      await runAction(
+        "import-ticket",
+        "tickets",
+        () => importTicketsTxtFromPath(path),
+        "已导入 tickets.txt。",
+        undefined,
+        true,
+      );
+    } catch (error) {
+      setNotice({ page: "tickets", text: String(error), kind: "error" });
+    }
   }
 
   async function searchSteamGames(event: React.FormEvent<HTMLFormElement>) {
@@ -393,9 +439,7 @@ export default function App() {
 
       setNotice({
         page: "packages",
-        text: nextState.settings.steamPath
-          ? `已添加 ${item.name}。`
-          : `已添加 ${item.name}，已保存到本地；设置 Steam 路径后可启用。`,
+        text: packageSavedMessage(nextState, `已添加 ${item.name}`),
         kind: "success",
       });
     } catch (error) {
@@ -456,11 +500,7 @@ export default function App() {
     }
   }
 
-  async function extractTicketByAppId() {
-    const input = window.prompt("请输入 AppID");
-    if (!input) return;
-
-    const appId = Number(input.trim());
+  async function extractTicketByAppId(appId: number) {
     if (!Number.isInteger(appId) || appId <= 0) {
       setNotice({ page: "tickets", text: "AppID 必须是正整数。", kind: "warning" });
       return;
@@ -475,8 +515,8 @@ export default function App() {
       "extract-ticket",
       "tickets",
       () => extractTicketCommand(appId, title),
-      `已提取 ${title} 的 ticket。`,
-      `正在提取 ${title} 的 ticket，请确认 Steam 正在运行并已登录。`,
+      `已提取 ${title} 的 Ticket。`,
+      `正在提取 ${title} 的 Ticket，请确认 Steam 正在运行并已登录。`,
       true,
     );
   }
@@ -485,7 +525,7 @@ export default function App() {
     try {
       const path = await save({
         title: "导出 tickets.txt",
-        defaultPath: `${ticket.appId}.tickets.txt`,
+        defaultPath: await downloadsDefaultPath(`${ticket.appId}.tickets.txt`),
         filters: [{ name: "tickets.txt", extensions: ["txt"] }],
       });
       if (!path) return;
@@ -504,14 +544,14 @@ export default function App() {
   }
 
   async function deleteTicket(ticket: TicketItem) {
-    const confirmed = window.confirm(`确定删除「${ticket.title}」的 ticket 吗？`);
+    const confirmed = window.confirm(`确定删除「${ticket.title}」的 Ticket 吗？`);
     if (!confirmed) return;
 
     await runAction(
       `delete-ticket-${ticket.appId}`,
       "tickets",
       () => deleteTicketCommand(ticket.appId),
-      "已删除 ticket。",
+      "已删除 Ticket。",
       undefined,
       true,
     );
@@ -587,7 +627,7 @@ export default function App() {
       "steam-path",
       "settings",
       () => setSteamPathCommand(steamPathInput.trim()),
-      "Steam 路径已保存，请重新启用需要的清单。",
+      steamPathSavedMessage,
     );
   }
 
@@ -653,7 +693,7 @@ export default function App() {
 
     try {
       const path = await detectSteamPathCommand();
-      if (!path) throw new Error("没有自动检测到 Steam 路径，可以手动填写 Steam 根目录。");
+      if (!path) throw new Error("没有自动检测到 Steam 路径，可以手动填写 Steam 根目录或 Steam.app。");
 
       setSteamPathInput(path);
       if (path === state?.settings.steamPath) {
@@ -663,7 +703,7 @@ export default function App() {
 
       const nextState = await setSteamPathCommand(path);
       await applyAppState(nextState);
-      setNotice({ page: "settings", text: "已自动检测并保存 Steam 路径，请重新启用需要的清单。", kind: "success" });
+      setNotice({ page: "settings", text: steamPathSavedMessage(nextState), kind: "success" });
     } catch (error) {
       setNotice({ page: "settings", text: String(error), kind: "error" });
     } finally {
@@ -673,10 +713,14 @@ export default function App() {
 
   async function chooseSteamPath() {
     try {
+      const defaultPath = await expandDialogDefaultPath(
+        state?.settings.steamPath ?? (await detectSteamPathCommand()),
+      );
       const selected = await open({
-        title: "选择 Steam 根目录",
+        title: "选择 Steam 根目录或 Steam.app",
         directory: true,
         multiple: false,
+        defaultPath,
       });
       const selectedPath = Array.isArray(selected) ? selected[0] : selected;
       if (!selectedPath) return;
@@ -686,7 +730,7 @@ export default function App() {
         "steam-path",
         "settings",
         () => setSteamPathCommand(selectedPath),
-        "Steam 路径已保存，请重新启用需要的清单。",
+        steamPathSavedMessage,
       );
     } catch (error) {
       setNotice({ page: "settings", text: String(error), kind: "error" });
@@ -706,6 +750,7 @@ export default function App() {
     <AppLayout
       page={page}
       installed={Boolean(state?.installStatus.installed)}
+      installSupported={Boolean(state?.installStatus.supported)}
       hasLoadedState={hasLoadedState}
       onPageChange={switchPage}
     >
@@ -719,6 +764,7 @@ export default function App() {
           hasSearched={hasSearched}
           hasLoadedState={hasLoadedState}
           hasSteamPath={Boolean(state?.settings.steamPath)}
+          packageSyncSupported={Boolean(state?.packageSyncSupported)}
           busy={busy}
           isSearching={isSearching}
           onRefresh={refreshState}

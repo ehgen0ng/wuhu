@@ -82,6 +82,7 @@ type SavedPackageCardProps = {
   index: number;
   busy: string | null;
   hasSteamPath: boolean;
+  packageSyncSupported: boolean;
   updateCheck?: PackageUpdateCheck;
   onUpdate: (pkg: PackageItem) => void;
   onToggle: (pkg: PackageItem, enabled: boolean) => void;
@@ -100,13 +101,21 @@ export function SavedPackageCard({
   index,
   busy,
   hasSteamPath,
+  packageSyncSupported,
   updateCheck,
   onUpdate,
   onToggle,
   onDelete,
 }: SavedPackageCardProps) {
   const isUpdating = busy === `update-manifest-${pkg.id}`;
-  const toggleTitle = hasSteamPath ? (pkg.enabled ? "禁用" : "启用") : "设置 Steam 路径后可启用";
+  const canSyncPackage = hasSteamPath && packageSyncSupported;
+  const toggleTitle = packageSyncSupported
+    ? hasSteamPath
+      ? pkg.enabled
+        ? "禁用"
+        : "启用"
+      : "设置 Steam 路径后可启用"
+    : "清单启用目前只支持 Windows";
 
   return (
     <Card className="package-card" p={0}>
@@ -152,7 +161,7 @@ export function SavedPackageCard({
               thumbIcon={null}
               title={toggleTitle}
               aria-label={`${toggleTitle} ${pkg.title}`}
-              disabled={!hasSteamPath || busy === `toggle-${pkg.id}`}
+              disabled={!canSyncPackage || busy === `toggle-${pkg.id}`}
               onChange={(event) => onToggle(pkg, event.currentTarget.checked)}
             />
             <ActionIcon

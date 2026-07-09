@@ -1,4 +1,4 @@
-import { Box, Button, FileButton, Group, Loader, SimpleGrid, Stack, Text, TextInput, ThemeIcon, Title } from "@mantine/core";
+import { Box, Button, Group, Loader, SimpleGrid, Stack, Text, TextInput, ThemeIcon, Title } from "@mantine/core";
 import { PackagePlus, RefreshCcw, Search, Upload } from "lucide-react";
 import type { FormEvent } from "react";
 import { NoticeAlert } from "../../components/NoticeAlert";
@@ -16,11 +16,12 @@ type PackagesPageProps = {
   hasSearched: boolean;
   hasLoadedState: boolean;
   hasSteamPath: boolean;
+  packageSyncSupported: boolean;
   busy: string | null;
   isSearching: boolean;
   onRefresh: () => void;
   onCheckPackageUpdates: () => void;
-  onImportFile: (file: File | null) => void;
+  onImportFile: () => void;
   onSearch: (event: FormEvent<HTMLFormElement>) => void;
   onSearchTermChange: (value: string) => void;
   onAddSearchResult: (item: SteamSearchResult) => void;
@@ -38,6 +39,7 @@ export function PackagesPage({
   hasSearched,
   hasLoadedState,
   hasSteamPath,
+  packageSyncSupported,
   busy,
   isSearching,
   onRefresh,
@@ -77,20 +79,17 @@ export function PackagesPage({
             >
               检查更新
             </Button>
-            <FileButton onChange={onImportFile} accept=".zip">
-              {(props) => (
-                <Button
-                  {...props}
-                  color="steam"
-                  variant="filled"
-                  c="#06121e"
-                  leftSection={isImporting ? <Loader color="#06121e" size={18} /> : <PackagePlus size={18} />}
-                  aria-busy={isImporting}
-                >
-                  导入清单
-                </Button>
-              )}
-            </FileButton>
+            <Button
+              color="steam"
+              variant="filled"
+              c="#06121e"
+              leftSection={isImporting ? <Loader color="#06121e" size={18} /> : <PackagePlus size={18} />}
+              aria-busy={isImporting}
+              disabled={isImporting}
+              onClick={onImportFile}
+            >
+              导入清单
+            </Button>
           </>
         }
       />
@@ -151,6 +150,7 @@ export function PackagesPage({
                 index={index}
                 busy={busy}
                 hasSteamPath={hasSteamPath}
+                packageSyncSupported={packageSyncSupported}
                 updateCheck={packageUpdateChecks[pkg.id]}
                 onUpdate={onUpdatePackage}
                 onToggle={onTogglePackage}

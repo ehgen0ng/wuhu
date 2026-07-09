@@ -32,15 +32,10 @@ pub(crate) fn extract_ticket(
     }
 
     let mut store = load_store()?;
-    let steam_path = steam::configured_path(&store)
-        .ok_or_else(|| "请先在设置里配置 Steam 路径".to_string())?
-        .to_string();
-    let steam_root = Path::new(&steam_path);
-    if !steam::looks_like_root(steam_root) {
-        return Err("Steam 路径不像 Steam 根目录，请检查设置".to_string());
-    }
+    let steam_root =
+        steam::configured_root(&store).ok_or_else(|| "请先在设置里配置 Steam 路径".to_string())?;
 
-    let extracted = steam_client::extract(steam_root, app_id)?;
+    let extracted = steam_client::extract(&steam_root, app_id)?;
     if extracted.app_ticket.is_none() && extracted.e_ticket.is_none() {
         return Err(
             "没有提取到 AppTicket 或 ETicket，请确认 Steam 已运行且账号拥有该游戏".to_string(),
@@ -75,6 +70,25 @@ pub(crate) fn import_tickets_txt(
         .map_err(|err| format!("tickets.txt 数据解码失败：{err}"))?;
     let text =
         String::from_utf8(bytes).map_err(|err| format!("tickets.txt 不是有效文本：{err}"))?;
+    import_tickets_text(file_name, text)
+}
+
+pub(crate) fn import_tickets_txt_from_path(
+    _app: &AppHandle,
+    path: String,
+) -> Result<AppState, String> {
+    let path = Path::new(&path);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "tickets.txt 文件名无效".to_string())?;
+    let text = fs::read_to_string(path).map_err(|err| format!("读取 tickets.txt 失败：{err}"))?;
+    import_tickets_text(file_name, text)
+}
+
+fn import_tickets_text(file_name: String, text: String) -> Result<AppState, String> {
     let ticket_data = parse_tickets_txt(&text)?;
     if ticket_data.app_ticket.is_none() && ticket_data.e_ticket.is_none() {
         return Err("tickets.txt 里没有可用的 AppTicket 或 ETicket".to_string());
