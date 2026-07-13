@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     models::{AppStore, PackageItem, TicketItem},
@@ -179,7 +182,7 @@ fn render_package_lua(
     ticket_items: &[TicketItem],
 ) -> Result<Vec<u8>, String> {
     let package_dir = app_root.join("packages").join(&package.id);
-    let mut lua = fs::read_to_string(package_dir.join("source.lua"))
+    let mut lua = fs::read_to_string(stored_lua_path(&package_dir, &package.lua_file_name))
         .map_err(|err| format!("读取 {} 的 Lua 失败：{err}", package.title))?;
 
     if let Some(app_id) = package.app_id {
@@ -198,6 +201,15 @@ fn render_package_lua(
     }
 
     Ok(lua.into_bytes())
+}
+
+fn stored_lua_path(package_dir: &Path, lua_file_name: &str) -> PathBuf {
+    let original_name_path = package_dir.join(lua_file_name);
+    if original_name_path.is_file() {
+        original_name_path
+    } else {
+        package_dir.join("source.lua")
+    }
 }
 
 fn remove_active_lua(steam_root: &Path, package: &PackageItem) -> Result<(), String> {

@@ -15,10 +15,24 @@ mod tickets;
 
 use models::{AppRelease, AppState, HubcapQuota, ManifestStatus, SteamSearchItem};
 use state::build_state;
-use store::{load_store, save_store};
+use store::{load_store, save_store, store_exists};
+
+fn try_lock_steam_client_on_first_launch(store: &models::AppStore, first_launch: bool) {
+    if !first_launch
+        || !steam::supports_client_version_lock()
+        || store.settings.steam_path.is_none()
+    {
+        return;
+    }
+
+    if let Err(err) = steam::set_client_version_locked(store, true) {
+        eprintln!("[wuhu] 首次启动锁定 Steam 客户端版本失败：{err}");
+    }
+}
 
 #[tauri::command]
 fn get_initial_state(_app: AppHandle) -> Result<AppState, String> {
+    let first_launch = !store_exists()?;
     let mut store = load_store()?;
     let mut changed = false;
 
@@ -34,6 +48,7 @@ fn get_initial_state(_app: AppHandle) -> Result<AppState, String> {
         store.settings.steam_path = steam::detect_path();
         changed = store.settings.steam_path.is_some();
     }
+    try_lock_steam_client_on_first_launch(&store, first_launch);
     changed |= packages::reconcile_with_steam(&mut store)?;
     if changed {
         save_store(&store)?;
@@ -48,6 +63,7 @@ fn detect_steam_path() -> Option<String> {
 
 #[tauri::command]
 fn set_steam_path(_app: AppHandle, path: String) -> Result<AppState, String> {
+    let first_launch = !store_exists()?;
     let mut store = load_store()?;
     let previous_path = store.settings.steam_path.clone();
     let trimmed = path.trim();
@@ -68,6 +84,7 @@ fn set_steam_path(_app: AppHandle, path: String) -> Result<AppState, String> {
         }
     }
 
+    try_lock_steam_client_on_first_launch(&store, first_launch);
     save_store(&store)?;
     build_state(store)
 }

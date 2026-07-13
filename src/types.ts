@@ -27,6 +27,7 @@ export type SteamClientStatus = {
   version: string | null;
   clientBuildDate: number | null;
   locked: boolean;
+  lockSupported: boolean;
 };
 
 export type AppState = {

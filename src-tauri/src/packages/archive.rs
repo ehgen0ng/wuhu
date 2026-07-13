@@ -75,7 +75,7 @@ pub(crate) fn import_archive(
     let package_dir = root.join("packages").join(&package_id);
     let manifest_dir = package_dir.join("manifests");
     fs::create_dir_all(&manifest_dir).map_err(|err| format!("创建包目录失败：{err}"))?;
-    fs::write(package_dir.join("source.lua"), lua_content.as_bytes())
+    fs::write(package_dir.join(&lua_file_name), lua_content.as_bytes())
         .map_err(|err| format!("保存 Lua 失败：{err}"))?;
 
     let mut manifest_files = Vec::new();
@@ -107,7 +107,7 @@ pub(crate) fn import_archive(
         id: package_id.clone(),
         title: package_metadata.title,
         app_id: package_metadata.app_id,
-        lua_file_name: format!("wuhu_{package_id}.lua"),
+        lua_file_name,
         manifest_files,
         source_zip_name: file_name,
         enabled: should_enable,

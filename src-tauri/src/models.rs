@@ -76,6 +76,7 @@ pub(crate) struct SteamClientStatus {
     pub(crate) version: Option<String>,
     pub(crate) client_build_date: Option<u64>,
     pub(crate) locked: bool,
+    pub(crate) lock_supported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -78,6 +78,7 @@ export function SettingsPage({
   const hasSteamPath = Boolean(state?.settings.steamPath);
   const hasSavedHubcapKey = Boolean(state?.settings.hubcapApiKey?.trim());
   const componentInstallSupported = Boolean(state?.installStatus.supported);
+  const steamClientLockSupported = Boolean(state?.steamClient.lockSupported);
   const componentStatus = componentInstallSupported
     ? state?.installStatus.installed
       ? "已安装"
@@ -215,7 +216,7 @@ export function SettingsPage({
             action={
               <Switch
                 checked={Boolean(state?.steamClient.locked)}
-                disabled={!componentInstallSupported || !hasSteamPath}
+                disabled={!steamClientLockSupported || !hasSteamPath}
                 thumbIcon={null}
                 title={state?.steamClient.locked ? "取消锁定" : "锁定"}
                 aria-label={state?.steamClient.locked ? "取消锁定 Steam 客户端版本" : "锁定 Steam 客户端版本"}

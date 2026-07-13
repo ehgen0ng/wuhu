@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use std::fs;
 
 use crate::models::{AppStore, InstallStatus, SteamClientStatus};
@@ -81,6 +81,10 @@ pub(crate) fn configured_root(store: &AppStore) -> Option<PathBuf> {
 
 pub(crate) fn supports_package_sync() -> bool {
     cfg!(windows)
+}
+
+pub(crate) fn supports_client_version_lock() -> bool {
+    cfg!(any(windows, target_os = "macos"))
 }
 
 pub(crate) fn package_sync_root(store: &AppStore) -> Option<PathBuf> {
@@ -274,17 +278,17 @@ pub(crate) fn restore_opensteamtool(store: &AppStore) -> Result<(), String> {
 }
 
 pub(crate) fn set_client_version_locked(store: &AppStore, locked: bool) -> Result<(), String> {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (store, locked);
-        return Err("Steam 客户端版本锁定目前只支持 Windows Steam 客户端".to_string());
+        return Err("Steam 客户端版本锁定目前只支持 Windows 和 macOS".to_string());
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let steam_root = configured_root(store).ok_or_else(|| "请先设置 Steam 路径".to_string())?;
 
-        set_client_lock_file(&steam_root, locked)
+        set_client_lock_file(&client_config_root(&steam_root), locked)
     }
 }
 
@@ -312,37 +316,54 @@ pub(crate) fn install_status(store: &AppStore) -> InstallStatus {
 }
 
 pub(crate) fn client_status(store: &AppStore) -> SteamClientStatus {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = store;
         return SteamClientStatus {
             version: None,
             client_build_date: None,
             locked: false,
+            lock_supported: false,
         };
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let Some(steam_root) = configured_root(store) else {
             return SteamClientStatus {
                 version: None,
                 client_build_date: None,
                 locked: false,
+                lock_supported: true,
             };
         };
 
         SteamClientStatus {
             version: read_client_version(&steam_root),
             client_build_date: read_client_build_date(&steam_root),
-            locked: is_client_locked(&steam_root),
+            locked: is_client_locked(&client_config_root(&steam_root)),
+            lock_supported: true,
         }
     }
 }
 
 #[cfg(windows)]
-fn set_client_lock_file(steam_root: &Path, locked: bool) -> Result<(), String> {
-    let config_path = steam_root.join("steam.cfg");
+fn client_config_root(steam_root: &Path) -> PathBuf {
+    steam_root.to_path_buf()
+}
+
+#[cfg(target_os = "macos")]
+fn client_config_root(steam_root: &Path) -> PathBuf {
+    steam_root
+        .join("Steam.AppBundle")
+        .join("Steam")
+        .join("Contents")
+        .join("MacOS")
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn set_client_lock_file(config_root: &Path, locked: bool) -> Result<(), String> {
+    let config_path = config_root.join("steam.cfg");
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path).map_err(|err| format!("读取 steam.cfg 失败：{err}"))?
     } else {
@@ -366,7 +387,7 @@ fn set_client_lock_file(steam_root: &Path, locked: bool) -> Result<(), String> {
     next.push('\n');
     fs::write(&config_path, next).map_err(|err| {
         if err.kind() == std::io::ErrorKind::PermissionDenied {
-            "写入 steam.cfg 失败：拒绝访问。请先完全退出 Steam，必要时以管理员身份运行 wuhu。"
+            "写入 steam.cfg 失败：拒绝访问。请先完全退出 Steam，并检查 Steam 目录写入权限。"
                 .to_string()
         } else {
             format!("写入 steam.cfg 失败：{err}")
@@ -374,7 +395,7 @@ fn set_client_lock_file(steam_root: &Path, locked: bool) -> Result<(), String> {
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn remove_client_lock_lines(content: &str) -> Vec<String> {
     content
         .lines()
@@ -391,16 +412,16 @@ fn remove_client_lock_lines(content: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(windows)]
-fn is_client_locked(steam_root: &Path) -> bool {
-    let Ok(content) = fs::read_to_string(steam_root.join("steam.cfg")) else {
+#[cfg(any(windows, target_os = "macos"))]
+fn is_client_locked(config_root: &Path) -> bool {
+    let Ok(content) = fs::read_to_string(config_root.join("steam.cfg")) else {
         return false;
     };
     has_config_value(&content, "BootStrapperInhibitAll", "enable")
         && has_config_value(&content, "BootStrapperForceSelfUpdate", "disable")
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn has_config_value(content: &str, key: &str, expected: &str) -> bool {
     content.lines().any(|line| {
         let Some((left, right)) = line.split_once('=') else {
@@ -410,7 +431,7 @@ fn has_config_value(content: &str, key: &str, expected: &str) -> bool {
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn read_client_version(steam_root: &Path) -> Option<String> {
     read_package_files(steam_root)
         .iter()
@@ -427,8 +448,8 @@ fn read_client_build_date(steam_root: &Path) -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn read_package_files(steam_root: &Path) -> [PathBuf; 4] {
-    [
+fn read_package_files(steam_root: &Path) -> Vec<PathBuf> {
+    vec![
         steam_root
             .join("package")
             .join("steam_client_win64.installed"),
@@ -442,6 +463,23 @@ fn read_package_files(steam_root: &Path) -> [PathBuf; 4] {
             .join("package")
             .join("steam_client_win32.manifest"),
     ]
+}
+
+#[cfg(target_os = "macos")]
+fn read_package_files(steam_root: &Path) -> Vec<PathBuf> {
+    let package_root = client_config_root(steam_root).join("package");
+    vec![
+        package_root.join("steam_client_osx.manifest"),
+        package_root.join("steam_client_signed_osx.manifest"),
+        package_root.join("steam_client_signed-2_osx.manifest"),
+    ]
+}
+
+#[cfg(target_os = "macos")]
+fn read_client_build_date(steam_root: &Path) -> Option<u64> {
+    read_client_version(steam_root)
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| is_timestamp_like_value(*value))
 }
 
 #[cfg(windows)]
@@ -460,7 +498,7 @@ fn read_package_build_timestamp(steam_root: &Path) -> Option<u64> {
         .max()
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn parse_vdf_field(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -498,7 +536,7 @@ fn read_pe_timestamp(path: &Path) -> Option<u64> {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn is_timestamp_like_value(timestamp: u64) -> bool {
     (1_262_304_000..=4_102_444_800).contains(&timestamp)
 }
@@ -526,4 +564,33 @@ fn embedded_tool_file(file_name: &str) -> Option<&'static [u8]> {
         .iter()
         .find(|file| file.name.eq_ignore_ascii_case(file_name))
         .map(|file| file.bytes)
+}
+
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod tests {
+    use super::{has_config_value, remove_client_lock_lines};
+
+    #[test]
+    fn client_lock_config_is_case_insensitive_and_preserves_other_settings() {
+        let content =
+            "Universe=Public\nbootstrapperinhibitall=ENABLE\nBootStrapperForceSelfUpdate=disable\n";
+
+        assert!(has_config_value(
+            content,
+            "BootStrapperInhibitAll",
+            "enable"
+        ));
+        assert_eq!(remove_client_lock_lines(content), vec!["Universe=Public"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_client_config_uses_the_active_app_bundle() {
+        let config_root = super::client_config_root(std::path::Path::new("/Steam"));
+
+        assert_eq!(
+            config_root,
+            std::path::Path::new("/Steam/Steam.AppBundle/Steam/Contents/MacOS")
+        );
+    }
 }

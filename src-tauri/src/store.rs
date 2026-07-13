@@ -1,14 +1,14 @@
-use std::{
-    env,
-    fs,
-    path::PathBuf,
-};
+use std::{env, fs, path::PathBuf};
 
 use crate::models::AppStore;
 
 #[cfg(target_os = "macos")]
 const MACOS_DATA_DIR_NAME: &str = "wuhu";
 const STORE_FILE: &str = "state.json";
+
+fn store_path() -> Result<PathBuf, String> {
+    Ok(portable_data_dir()?.join(STORE_FILE))
+}
 
 pub(crate) fn portable_data_dir() -> Result<PathBuf, String> {
     let path = data_root_dir()?;
@@ -36,7 +36,7 @@ fn data_root_dir() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn load_store() -> Result<AppStore, String> {
-    let path = portable_data_dir()?.join(STORE_FILE);
+    let path = store_path()?;
     if !path.exists() {
         return Ok(AppStore::default());
     }
@@ -45,8 +45,12 @@ pub(crate) fn load_store() -> Result<AppStore, String> {
 }
 
 pub(crate) fn save_store(store: &AppStore) -> Result<(), String> {
-    let path = portable_data_dir()?.join(STORE_FILE);
+    let path = store_path()?;
     let data =
         serde_json::to_string_pretty(store).map_err(|err| format!("序列化状态失败：{err}"))?;
     fs::write(path, data).map_err(|err| format!("保存状态文件失败：{err}"))
+}
+
+pub(crate) fn store_exists() -> Result<bool, String> {
+    Ok(store_path()?.exists())
 }
