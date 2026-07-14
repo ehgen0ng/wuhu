@@ -8,6 +8,8 @@ type AppLayoutProps = {
   page: Page;
   installed: boolean;
   installSupported: boolean;
+  launchRequired: boolean;
+  launchedViaWuhu: boolean;
   hasLoadedState: boolean;
   onPageChange: (page: Page) => void;
   children: ReactNode;
@@ -17,18 +19,32 @@ export function AppLayout({
   page,
   installed,
   installSupported,
+  launchRequired,
+  launchedViaWuhu,
   hasLoadedState,
   onPageChange,
   children,
 }: AppLayoutProps) {
   const statusText = hasLoadedState
     ? installSupported
-      ? installed
-        ? "组件已安装"
-        : "等待安装组件"
+      ? launchRequired
+        ? launchedViaWuhu
+          ? "Steam 已通过 wuhu 启动"
+          : "Steam 未通过 wuhu 启动"
+        : installed
+          ? "组件已安装"
+          : "等待安装组件"
       : "组件不支持当前系统"
     : "状态未读取";
-  const statusColor = installSupported ? (installed ? "green" : "red") : "gray";
+  const statusColor = installSupported
+    ? launchRequired
+      ? launchedViaWuhu
+        ? "green"
+        : "red"
+      : installed
+        ? "green"
+        : "red"
+    : "gray";
 
   return (
     <AppShell navbar={{ width: 260, breakpoint: "sm" }} className="app-shell">

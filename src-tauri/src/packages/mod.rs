@@ -72,7 +72,7 @@ pub(crate) fn add_steam_game(
 pub(crate) fn set_enabled(_app: &AppHandle, id: String, enabled: bool) -> Result<AppState, String> {
     let mut store = load_store()?;
     if enabled && !steam::supports_package_sync() {
-        return Err("清单启用目前只支持 Windows Steam 客户端".to_string());
+        return Err("清单启用目前只支持 Windows 和 macOS Steam 客户端".to_string());
     }
 
     let next_enabled = enabled && steam::package_sync_root(&store).is_some();

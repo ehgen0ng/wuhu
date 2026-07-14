@@ -6,10 +6,23 @@ use std::{
 #[cfg(any(windows, target_os = "macos"))]
 use std::fs;
 
+#[cfg(target_os = "macos")]
+use std::process::Command;
+
 use crate::models::{AppStore, InstallStatus, SteamClientStatus};
 
 #[cfg(windows)]
-const DLL_NAMES: [&str; 3] = ["dwmapi.dll", "xinput1_4.dll", "OpenSteamTool.dll"];
+const PROXY_DLL_NAMES: [&str; 2] = ["dwmapi.dll", "xinput1_4.dll"];
+
+#[cfg(windows)]
+const OPENSTEAMTOOL_DLL_NAME: &str = "OpenSteamTool.dll";
+
+#[cfg(target_os = "macos")]
+const OPENSTEAMTOOL_DYLIB_NAME: &str = "libOpenSteamTool.dylib";
+
+#[cfg(target_os = "macos")]
+const EMBEDDED_OPENSTEAMTOOL_DYLIB: &[u8] =
+    include_bytes!("../../resources/opensteamtool/libOpenSteamTool.dylib");
 
 #[cfg(windows)]
 struct EmbeddedToolFile {
@@ -36,7 +49,7 @@ const EMBEDDED_TOOL_FILES: [EmbeddedToolFile; 3] = [
 pub(crate) fn detect_path() -> Option<String> {
     detect_path_candidates()
         .into_iter()
-        .find_map(|path| normalize_root_path(&path))
+        .find_map(|path| normalize_configured_path(&path))
         .and_then(|path| path_to_string(&path))
 }
 
@@ -50,12 +63,12 @@ fn detect_path_candidates() -> Vec<PathBuf> {
 #[cfg(target_os = "macos")]
 fn detect_path_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(root) = default_macos_data_root() {
-        candidates.push(root);
-    }
     candidates.push(PathBuf::from("/Applications/Steam.app"));
     if let Some(home) = home_dir() {
         candidates.push(home.join("Applications").join("Steam.app"));
+    }
+    if let Some(root) = default_macos_data_root() {
+        candidates.push(root);
     }
     candidates
 }
@@ -66,7 +79,17 @@ fn detect_path_candidates() -> Vec<PathBuf> {
 }
 
 pub(crate) fn normalize_path(path: &str) -> Option<String> {
-    normalize_root_path(&input_path(path)?).and_then(|path| path_to_string(&path))
+    normalize_configured_path(&input_path(path)?).and_then(|path| path_to_string(&path))
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_configured_path(path: &Path) -> Option<PathBuf> {
+    macos_app_bundle_path(path).or_else(|| normalize_root_path(path))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn normalize_configured_path(path: &Path) -> Option<PathBuf> {
+    normalize_root_path(path)
 }
 
 pub(crate) fn configured_root(store: &AppStore) -> Option<PathBuf> {
@@ -80,7 +103,7 @@ pub(crate) fn configured_root(store: &AppStore) -> Option<PathBuf> {
 }
 
 pub(crate) fn supports_package_sync() -> bool {
-    cfg!(windows)
+    cfg!(any(windows, target_os = "macos"))
 }
 
 pub(crate) fn supports_client_version_lock() -> bool {
@@ -88,9 +111,23 @@ pub(crate) fn supports_client_version_lock() -> bool {
 }
 
 pub(crate) fn package_sync_root(store: &AppStore) -> Option<PathBuf> {
-    supports_package_sync()
-        .then(|| configured_root(store))
-        .flatten()
+    if !supports_package_sync() || package_lua_root().is_none() {
+        return None;
+    }
+
+    configured_root(store)
+}
+
+pub(crate) fn package_lua_root() -> Option<PathBuf> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        opensteamtool_data_root().map(|root| root.join("lua"))
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
 }
 
 fn input_path(path: &str) -> Option<PathBuf> {
@@ -195,14 +232,21 @@ fn macos_data_root_from_app_bundle_path(path: &Path) -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn macos_looks_like_launcher_path(path: &Path) -> bool {
-    path.ancestors().any(|ancestor| {
-        file_name_eq(ancestor, "Steam.app")
-            && ancestor
-                .join("Contents")
-                .join("MacOS")
-                .join("steam_osx")
-                .exists()
-    })
+    macos_app_bundle_path(path).is_some()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_path(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| {
+            file_name_eq(ancestor, "Steam.app")
+                && ancestor
+                    .join("Contents")
+                    .join("MacOS")
+                    .join("steam_osx")
+                    .is_file()
+        })
+        .map(Path::to_path_buf)
 }
 
 #[cfg(target_os = "macos")]
@@ -240,23 +284,96 @@ pub(crate) fn install_opensteamtool(store: &AppStore) -> Result<(), String> {
     #[cfg(windows)]
     {
         let steam_root = configured_root(store).ok_or_else(|| "请先设置 Steam 路径".to_string())?;
+        let core_path = opensteamtool_binary_path().ok_or_else(|| {
+            "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
+                .to_string()
+        })?;
 
-        for file_name in DLL_NAMES {
-            let target = steam_root.join(file_name);
-            let bytes = embedded_tool_file(file_name)
-                .ok_or_else(|| format!("内置资源缺少 {file_name}，请重新构建 wuhu"))?;
-            fs::write(&target, bytes).map_err(|err| format!("安装 {file_name} 失败：{err}"))?;
+        if let Some(binary_dir) = core_path.parent() {
+            fs::create_dir_all(binary_dir)
+                .map_err(|err| format!("创建 OpenSteamTool bin 目录失败：{err}"))?;
+        }
+
+        write_embedded_tool_file(&core_path, OPENSTEAMTOOL_DLL_NAME)?;
+
+        for file_name in PROXY_DLL_NAMES {
+            write_embedded_tool_file(&steam_root.join(file_name), file_name)?;
+        }
+
+        let legacy_core_path = steam_root.join(OPENSTEAMTOOL_DLL_NAME);
+        if legacy_core_path.exists() {
+            remove_component_file(&legacy_core_path, OPENSTEAMTOOL_DLL_NAME)?;
         }
 
         Ok(())
     }
 }
 
-pub(crate) fn restore_opensteamtool(store: &AppStore) -> Result<(), String> {
-    #[cfg(not(windows))]
+pub(crate) fn launch_steam_with_opensteamtool(store: &AppStore) -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = store;
-        return Err("组件恢复目前只支持 Windows Steam 客户端".to_string());
+        return Err("通过 wuhu 启动 Steam 目前只支持 macOS".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let steam_executable = macos_steam_executable(store)
+            .ok_or_else(|| "没有找到设置中的 Steam.app，请检查 Steam 路径".to_string())?;
+        let running_pids = macos_steam_process_ids()?;
+        if !running_pids.is_empty() {
+            let message = macos_launch_marker_pid()
+                .filter(|pid| running_pids.contains(pid))
+                .map(|_| "Steam 已经由 wuhu 启动".to_string())
+                .unwrap_or_else(|| "Steam 正在运行，请先完全退出 Steam 后再启动".to_string());
+            return Err(message);
+        }
+
+        let dylib_path = opensteamtool_binary_path().ok_or_else(|| {
+            "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 HOME 均未设置".to_string()
+        })?;
+        let binary_dir = dylib_path
+            .parent()
+            .ok_or_else(|| "OpenSteamTool bin 目录无效".to_string())?;
+        fs::create_dir_all(binary_dir)
+            .map_err(|err| format!("创建 OpenSteamTool bin 目录失败：{err}"))?;
+
+        let needs_deploy = fs::read(&dylib_path)
+            .map(|bytes| bytes != EMBEDDED_OPENSTEAMTOOL_DYLIB)
+            .unwrap_or(true);
+        if needs_deploy {
+            fs::write(&dylib_path, EMBEDDED_OPENSTEAMTOOL_DYLIB)
+                .map_err(|err| format!("部署 {OPENSTEAMTOOL_DYLIB_NAME} 失败：{err}"))?;
+        }
+
+        let backup_path = macos_steam_backup_path(&steam_executable);
+        if !backup_path.exists() {
+            macos_copy_preserving(&steam_executable, &backup_path, "备份 steam_osx")?;
+        } else if !macos_is_ad_hoc_signed(&steam_executable)? {
+            macos_copy_preserving(&steam_executable, &backup_path, "更新 steam_osx 备份")?;
+        }
+
+        macos_codesign(&steam_executable, "重签 steam_osx")?;
+        macos_codesign(&dylib_path, "签名 libOpenSteamTool.dylib")?;
+
+        let child = Command::new(&steam_executable)
+            .env("DYLD_INSERT_LIBRARIES", &dylib_path)
+            .spawn()
+            .map_err(|err| format!("启动 Steam 失败：{err}"))?;
+        let marker_path = macos_launch_marker_path()
+            .ok_or_else(|| "无法确定 wuhu 启动状态文件位置".to_string())?;
+        fs::write(&marker_path, child.id().to_string())
+            .map_err(|err| format!("Steam 已启动，但记录 wuhu 启动状态失败：{err}"))?;
+
+        Ok(())
+    }
+}
+
+pub(crate) fn restore_opensteamtool(store: &AppStore) -> Result<(), String> {
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = store;
+        return Err("组件恢复目前只支持 Windows 和 macOS Steam 客户端".to_string());
     }
 
     #[cfg(windows)]
@@ -264,13 +381,60 @@ pub(crate) fn restore_opensteamtool(store: &AppStore) -> Result<(), String> {
         let steam_root = configured_root(store).ok_or_else(|| "请先设置 Steam 路径".to_string())?;
 
         let mut errors = Vec::new();
-        for file_name in DLL_NAMES {
+        for file_name in PROXY_DLL_NAMES {
             if let Err(err) = remove_component_file(&steam_root.join(file_name), file_name) {
                 errors.push(err);
             }
         }
+
+        if let Err(err) = remove_component_file(
+            &steam_root.join(OPENSTEAMTOOL_DLL_NAME),
+            OPENSTEAMTOOL_DLL_NAME,
+        ) {
+            errors.push(err);
+        }
+
+        match opensteamtool_binary_path() {
+            Some(core_path) => {
+                if let Err(err) = remove_component_file(&core_path, OPENSTEAMTOOL_DLL_NAME) {
+                    errors.push(err);
+                }
+            }
+            None => errors.push(
+                "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
+                    .to_string(),
+            ),
+        }
+
         if !errors.is_empty() {
             return Err(errors.join("\n"));
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if !macos_steam_process_ids()?.is_empty() {
+            return Err("Steam 正在运行，请先完全退出 Steam 后再恢复".to_string());
+        }
+
+        let steam_executable = macos_steam_executable(store)
+            .ok_or_else(|| "没有找到设置中的 Steam.app，请检查 Steam 路径".to_string())?;
+        let backup_path = macos_steam_backup_path(&steam_executable);
+        if backup_path.exists() {
+            if macos_is_ad_hoc_signed(&steam_executable)? {
+                macos_copy_preserving(&backup_path, &steam_executable, "恢复 steam_osx")?;
+            }
+            fs::remove_file(&backup_path)
+                .map_err(|err| format!("删除 steam_osx 备份失败：{err}"))?;
+        }
+
+        if let Some(dylib_path) = opensteamtool_binary_path() {
+            remove_macos_file_if_exists(&dylib_path, OPENSTEAMTOOL_DYLIB_NAME)?;
+        }
+        if let Some(marker_path) = macos_launch_marker_path() {
+            remove_macos_file_if_exists(&marker_path, "wuhu 启动状态")?;
         }
 
         Ok(())
@@ -293,24 +457,48 @@ pub(crate) fn set_client_version_locked(store: &AppStore, locked: bool) -> Resul
 }
 
 pub(crate) fn install_status(store: &AppStore) -> InstallStatus {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = store;
         return InstallStatus {
             installed: false,
             supported: false,
+            launch_required: false,
+            launched_via_wuhu: false,
         };
     }
 
     #[cfg(windows)]
     {
         let installed = configured_root(store)
-            .map(|path| DLL_NAMES.iter().all(|name| path.join(name).exists()))
+            .zip(opensteamtool_binary_path())
+            .map(|(steam_root, core_path)| {
+                core_path.exists()
+                    && PROXY_DLL_NAMES
+                        .iter()
+                        .all(|name| steam_root.join(name).exists())
+            })
             .unwrap_or(false);
 
         InstallStatus {
             installed,
             supported: true,
+            launch_required: false,
+            launched_via_wuhu: false,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let installed = macos_steam_executable(store)
+            .map(|path| macos_steam_backup_path(&path).exists())
+            .unwrap_or(false);
+
+        InstallStatus {
+            installed,
+            supported: true,
+            launch_required: true,
+            launched_via_wuhu: macos_launched_via_wuhu(),
         }
     }
 }
@@ -559,6 +747,234 @@ fn remove_component_file(target: &Path, file_name: &str) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+fn opensteamtool_data_root() -> Option<PathBuf> {
+    env::var_os("OST_DATA_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("LOCALAPPDATA")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .map(|path| path.join("OpenSteamTool"))
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn opensteamtool_data_root() -> Option<PathBuf> {
+    env::var_os("OST_DATA_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home_dir().map(|home| {
+                home.join("Library")
+                    .join("Application Support")
+                    .join("OpenSteamTool")
+            })
+        })
+}
+
+#[cfg(windows)]
+fn opensteamtool_binary_path() -> Option<PathBuf> {
+    let data_root = opensteamtool_data_root()?;
+
+    Some(data_root.join("bin").join(OPENSTEAMTOOL_DLL_NAME))
+}
+
+#[cfg(target_os = "macos")]
+fn opensteamtool_binary_path() -> Option<PathBuf> {
+    Some(
+        opensteamtool_data_root()?
+            .join("bin")
+            .join(OPENSTEAMTOOL_DYLIB_NAME),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn macos_steam_executable(store: &AppStore) -> Option<PathBuf> {
+    let configured = store
+        .settings
+        .steam_path
+        .as_deref()
+        .and_then(input_path)
+        .and_then(|path| macos_app_bundle_path(&path))
+        .map(|app| app.join("Contents").join("MacOS").join("steam_osx"));
+    if configured.as_ref().is_some_and(|path| path.is_file()) {
+        return configured;
+    }
+
+    let mut candidates = vec![PathBuf::from(
+        "/Applications/Steam.app/Contents/MacOS/steam_osx",
+    )];
+    if let Some(home) = home_dir() {
+        candidates.push(
+            home.join("Applications")
+                .join("Steam.app")
+                .join("Contents")
+                .join("MacOS")
+                .join("steam_osx"),
+        );
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_steam_backup_path(steam_executable: &Path) -> PathBuf {
+    let mut backup = steam_executable.as_os_str().to_os_string();
+    backup.push(".ostbak");
+    PathBuf::from(backup)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_launch_marker_path() -> Option<PathBuf> {
+    Some(opensteamtool_data_root()?.join("wuhu-steam.pid"))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_launch_marker_pid() -> Option<u32> {
+    fs::read_to_string(macos_launch_marker_path()?)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_process_ids(output: &str) -> Vec<u32> {
+    output
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_steam_process_ids() -> Result<Vec<u32>, String> {
+    let output = Command::new("/usr/bin/pgrep")
+        .args(["-x", "steam_osx"])
+        .output()
+        .map_err(|err| format!("检查 Steam 运行状态失败：{err}"))?;
+
+    if output.status.success() {
+        return Ok(parse_macos_process_ids(&String::from_utf8_lossy(
+            &output.stdout,
+        )));
+    }
+    if output.status.code() == Some(1) {
+        return Ok(Vec::new());
+    }
+
+    Err(format!(
+        "检查 Steam 运行状态失败：{}",
+        command_error_detail(&output)
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_launched_via_wuhu() -> bool {
+    let Some(marker_path) = macos_launch_marker_path() else {
+        return false;
+    };
+    let Some(pid) = macos_launch_marker_pid() else {
+        let _ = fs::remove_file(marker_path);
+        return false;
+    };
+
+    match macos_steam_process_ids() {
+        Ok(pids) if pids.contains(&pid) => true,
+        Ok(_) => {
+            let _ = fs::remove_file(marker_path);
+            false
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_copy_preserving(source: &Path, destination: &Path, action: &str) -> Result<(), String> {
+    let output = Command::new("/bin/cp")
+        .arg("-p")
+        .arg(source)
+        .arg(destination)
+        .output()
+        .map_err(|err| format!("{action}失败：{err}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{action}失败：{}", command_error_detail(&output)))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codesign(path: &Path, action: &str) -> Result<(), String> {
+    let output = Command::new("/usr/bin/codesign")
+        .args(["-f", "-s", "-"])
+        .arg(path)
+        .output()
+        .map_err(|err| format!("{action}失败：{err}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{action}失败：{}", command_error_detail(&output)))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_is_ad_hoc_signed(path: &Path) -> Result<bool, String> {
+    let output = Command::new("/usr/bin/codesign")
+        .arg("-dvvv")
+        .arg(path)
+        .output()
+        .map_err(|err| format!("检查 steam_osx 签名失败：{err}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "检查 steam_osx 签名失败：{}",
+            command_error_detail(&output)
+        ));
+    }
+
+    Ok(parse_macos_ad_hoc_signature(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_macos_ad_hoc_signature(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("Signature=adhoc"))
+}
+
+#[cfg(target_os = "macos")]
+fn command_error_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    if detail.is_empty() {
+        output.status.to_string()
+    } else {
+        detail.to_string()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn remove_macos_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(path).map_err(|err| format!("移除 {label} 失败：{err}"))
+}
+
+#[cfg(windows)]
+fn write_embedded_tool_file(target: &Path, file_name: &str) -> Result<(), String> {
+    let bytes = embedded_tool_file(file_name)
+        .ok_or_else(|| format!("内置资源缺少 {file_name}，请重新构建 wuhu"))?;
+    fs::write(target, bytes).map_err(|err| format!("安装 {file_name} 失败：{err}"))
+}
+
+#[cfg(windows)]
 fn embedded_tool_file(file_name: &str) -> Option<&'static [u8]> {
     EMBEDDED_TOOL_FILES
         .iter()
@@ -592,5 +1008,54 @@ mod tests {
             config_root,
             std::path::Path::new("/Steam/Steam.AppBundle/Steam/Contents/MacOS")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_steam_executable_prefers_the_configured_app_bundle() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let test_root =
+            std::env::temp_dir().join(format!("wuhu-steam-path-{}-{unique}", std::process::id()));
+        let app_path = test_root.join("Custom").join("Steam.app");
+        let executable = app_path.join("Contents").join("MacOS").join("steam_osx");
+        std::fs::create_dir_all(
+            executable
+                .parent()
+                .expect("executable should have a parent"),
+        )
+        .expect("test Steam.app directory should be created");
+        std::fs::write(&executable, b"test").expect("test steam_osx should be created");
+
+        let mut store = crate::models::AppStore::default();
+        store.settings.steam_path = Some(app_path.to_string_lossy().into_owned());
+
+        assert_eq!(super::macos_steam_executable(&store), Some(executable));
+        std::fs::remove_dir_all(test_root).expect("test directory should be removed");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_process_ids_ignore_empty_and_invalid_lines() {
+        assert_eq!(
+            super::parse_macos_process_ids("123\n\ninvalid\n456\n"),
+            vec![123, 456]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_signature_parser_distinguishes_ad_hoc_and_valve_signatures() {
+        assert!(super::parse_macos_ad_hoc_signature(
+            "Identifier=com.valvesoftware.steam\nSignature=adhoc\nTeamIdentifier=not set\n"
+        ));
+        assert!(!super::parse_macos_ad_hoc_signature(
+            "Authority=Developer ID Application: Valve Corporation (MXGJJ98X76)\n\
+             TeamIdentifier=MXGJJ98X76\n"
+        ));
     }
 }

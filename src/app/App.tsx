@@ -8,12 +8,14 @@ import {
   detectSteamPath as detectSteamPathCommand,
   exportTicketsTxt,
   extractTicket as extractTicketCommand,
+  getOpenSteamToolStatus,
   getHubcapQuota,
   getInitialState,
   getLatestAppRelease,
   importPackageFromPath,
   importTicketsTxtFromPath,
   installOpenSteamTool,
+  launchSteamWithOpenSteamTool,
   restoreOpenSteamTool,
   setDepotboxApiKey,
   setHubcapApiKey,
@@ -47,7 +49,7 @@ import { APP_VERSION, isVersionNewer, waitForTauriRuntime } from "./runtime";
 function packageSavedMessage(state: AppState | null | undefined | void, subject: string) {
   if (state?.packageSyncSupported && state.settings.steamPath) return `${subject}。`;
   if (state?.settings.steamPath) return `${subject}，已保存到本地；当前系统暂不支持启用清单。`;
-  return `${subject}，已保存到本地；设置 Windows Steam 路径后可启用。`;
+  return `${subject}，已保存到本地；设置 Steam 路径后可启用。`;
 }
 
 function steamPathSavedMessage(_state: AppState | null | undefined | void) {
@@ -182,6 +184,30 @@ export default function App() {
   useEffect(() => {
     void checkLatestRelease();
   }, []);
+
+  useEffect(() => {
+    if (!state?.installStatus.launchRequired) return;
+
+    let cancelled = false;
+
+    async function refreshOpenSteamToolStatus() {
+      try {
+        const installStatus = await getOpenSteamToolStatus();
+        if (cancelled) return;
+        setState((current) => (current ? { ...current, installStatus } : current));
+      } catch (error) {
+        console.info("[wuhu] OpenSteamTool status refresh skipped", error);
+      }
+    }
+
+    void refreshOpenSteamToolStatus();
+    const timer = window.setInterval(() => void refreshOpenSteamToolStatus(), 3_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [state?.installStatus.launchRequired]);
 
   function switchPage(nextPage: Page) {
     setPage(nextPage);
@@ -751,6 +777,8 @@ export default function App() {
       page={page}
       installed={Boolean(state?.installStatus.installed)}
       installSupported={Boolean(state?.installStatus.supported)}
+      launchRequired={Boolean(state?.installStatus.launchRequired)}
+      launchedViaWuhu={Boolean(state?.installStatus.launchedViaWuhu)}
       hasLoadedState={hasLoadedState}
       onPageChange={switchPage}
     >
@@ -822,8 +850,21 @@ export default function App() {
               "安装完成。建议重启 Steam 后生效。",
             )
           }
+          onLaunchSteamWithOpenSteamTool={() =>
+            runAction(
+              "launch-steam",
+              "settings",
+              () => launchSteamWithOpenSteamTool(),
+              "已通过 wuhu 启动 Steam。",
+            )
+          }
           onRestoreOpenSteamTool={() =>
-            runAction("restore", "settings", () => restoreOpenSteamTool(), "已移除组件。")
+            runAction(
+              "restore",
+              "settings",
+              () => restoreOpenSteamTool(),
+              state?.installStatus.launchRequired ? "已恢复 Steam 原文件。" : "已移除组件。",
+            )
           }
           onToggleSteamClientLock={toggleSteamClientLock}
         />

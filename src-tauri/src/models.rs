@@ -68,6 +68,8 @@ pub(crate) struct AppState {
 pub(crate) struct InstallStatus {
     pub(crate) installed: bool,
     pub(crate) supported: bool,
+    pub(crate) launch_required: bool,
+    pub(crate) launched_via_wuhu: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -13,7 +13,7 @@ mod steam;
 mod store;
 mod tickets;
 
-use models::{AppRelease, AppState, HubcapQuota, ManifestStatus, SteamSearchItem};
+use models::{AppRelease, AppState, HubcapQuota, InstallStatus, ManifestStatus, SteamSearchItem};
 use state::build_state;
 use store::{load_store, save_store, store_exists};
 
@@ -268,6 +268,19 @@ fn install_opensteamtool(_app: AppHandle) -> Result<AppState, String> {
 }
 
 #[tauri::command]
+fn launch_steam_with_opensteamtool(_app: AppHandle) -> Result<AppState, String> {
+    let store = load_store()?;
+    steam::launch_steam_with_opensteamtool(&store)?;
+    build_state(store)
+}
+
+#[tauri::command]
+fn get_opensteamtool_status(_app: AppHandle) -> Result<InstallStatus, String> {
+    let store = load_store()?;
+    Ok(steam::install_status(&store))
+}
+
+#[tauri::command]
 fn restore_opensteamtool(_app: AppHandle) -> Result<AppState, String> {
     let store = load_store()?;
     steam::restore_opensteamtool(&store)?;
@@ -334,6 +347,8 @@ pub fn run() {
             export_tickets_txt,
             delete_ticket,
             install_opensteamtool,
+            launch_steam_with_opensteamtool,
+            get_opensteamtool_status,
             restore_opensteamtool,
             set_steam_client_version_locked,
             search_steam_games,

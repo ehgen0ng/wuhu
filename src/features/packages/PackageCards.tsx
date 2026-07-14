@@ -115,7 +115,7 @@ export function SavedPackageCard({
         ? "禁用"
         : "启用"
       : "设置 Steam 路径后可启用"
-    : "清单启用目前只支持 Windows";
+    : "清单启用目前只支持 Windows 和 macOS";
 
   return (
     <Card className="package-card" p={0}>

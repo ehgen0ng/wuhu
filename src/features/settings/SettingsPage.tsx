@@ -16,6 +16,7 @@ import {
   Info,
   KeyRound,
   LockKeyhole,
+  Play,
   RefreshCcw,
   Wrench,
 } from "lucide-react";
@@ -47,6 +48,7 @@ type SettingsPageProps = {
   onRefreshHubcapQuota: () => void;
   onCheckLatestRelease: () => void;
   onInstallOpenSteamTool: () => void;
+  onLaunchSteamWithOpenSteamTool: () => void;
   onRestoreOpenSteamTool: () => void;
   onToggleSteamClientLock: (locked: boolean) => void;
 };
@@ -72,17 +74,26 @@ export function SettingsPage({
   onRefreshHubcapQuota,
   onCheckLatestRelease,
   onInstallOpenSteamTool,
+  onLaunchSteamWithOpenSteamTool,
   onRestoreOpenSteamTool,
   onToggleSteamClientLock,
 }: SettingsPageProps) {
   const hasSteamPath = Boolean(state?.settings.steamPath);
   const hasSavedHubcapKey = Boolean(state?.settings.hubcapApiKey?.trim());
   const componentInstallSupported = Boolean(state?.installStatus.supported);
+  const launchRequired = Boolean(state?.installStatus.launchRequired);
+  const launchedViaWuhu = Boolean(state?.installStatus.launchedViaWuhu);
   const steamClientLockSupported = Boolean(state?.steamClient.lockSupported);
   const componentStatus = componentInstallSupported
-    ? state?.installStatus.installed
-      ? "已安装"
-      : "未安装"
+    ? launchRequired
+      ? launchedViaWuhu
+        ? "Steam 已通过 wuhu 启动"
+        : state?.installStatus.installed
+          ? "Steam 未通过 wuhu 启动"
+          : "首次启动时自动准备"
+      : state?.installStatus.installed
+        ? "已安装"
+        : "未安装"
     : "不支持当前系统";
 
   return (
@@ -178,25 +189,35 @@ export function SettingsPage({
         </Group>
       </SettingSection>
 
-      <SettingSection icon={Wrench} title="组件安装">
-        <InfoTile label="当前状态" value={componentStatus} />
+      <SettingSection icon={Wrench} title={launchRequired ? "Steam 启动" : "组件安装"}>
+        <InfoTile
+          label="当前状态"
+          value={componentStatus}
+          detail={launchRequired ? "macOS 需要通过 wuhu 启动 Steam 才会加载组件" : undefined}
+        />
 
         <Group mt="md" gap="sm">
           <Button
             color="steam"
             variant="filled"
             c="#06121e"
-            leftSection={<CheckCircle2 size={18} />}
-            onClick={onInstallOpenSteamTool}
-            disabled={!componentInstallSupported || !hasSteamPath}
+            leftSection={launchRequired ? <Play size={18} /> : <CheckCircle2 size={18} />}
+            onClick={launchRequired ? onLaunchSteamWithOpenSteamTool : onInstallOpenSteamTool}
+            disabled={
+              !componentInstallSupported || !hasSteamPath || (launchRequired && launchedViaWuhu)
+            }
           >
-            安装
+            {launchRequired ? "启动 Steam" : "安装"}
           </Button>
           <Button
             color="red"
             variant="subtle"
             onClick={onRestoreOpenSteamTool}
-            disabled={!componentInstallSupported || !state?.installStatus.installed}
+            disabled={
+              !componentInstallSupported ||
+              !state?.installStatus.installed ||
+              (launchRequired && launchedViaWuhu)
+            }
           >
             恢复
           </Button>

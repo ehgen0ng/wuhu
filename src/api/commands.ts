@@ -1,5 +1,12 @@
 import { call } from "../lib/tauri";
-import type { AppRelease, AppState, HubcapQuota, ManifestStatus, SteamSearchResult } from "../types";
+import type {
+  AppRelease,
+  AppState,
+  HubcapQuota,
+  InstallStatus,
+  ManifestStatus,
+  SteamSearchResult,
+} from "../types";
 
 export function getInitialState() {
   return call<AppState>("get_initial_state");
@@ -83,6 +90,14 @@ export function deleteTicket(appId: number) {
 
 export function installOpenSteamTool() {
   return call<AppState>("install_opensteamtool");
+}
+
+export function launchSteamWithOpenSteamTool() {
+  return call<AppState>("launch_steam_with_opensteamtool");
+}
+
+export function getOpenSteamToolStatus() {
+  return call<InstallStatus>("get_opensteamtool_status");
 }
 
 export function restoreOpenSteamTool() {

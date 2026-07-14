@@ -21,6 +21,8 @@ export type AppSettings = {
 export type InstallStatus = {
   installed: boolean;
   supported: boolean;
+  launchRequired: boolean;
+  launchedViaWuhu: boolean;
 };
 
 export type SteamClientStatus = {
