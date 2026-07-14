@@ -75,9 +75,19 @@ jobs:
           retention-days: 7
 
   windows:
-    name: Package Windows x64
+    name: Package Windows x64 (${{ matrix.profile }})
     runs-on: windows-2025
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: release
+            tauri_args: ""
+            target_dir: release
+          - profile: debug
+            tauri_args: "--debug"
+            target_dir: debug
 
     steps:
       - name: Checkout
@@ -101,37 +111,50 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: windows-x64-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          key: windows-x64-${{ matrix.profile }}-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
           restore-keys: |
+            windows-x64-${{ matrix.profile }}-cargo-
             windows-x64-cargo-
 
       - name: Install npm dependencies
         run: npm ci --prefer-offline --no-audit --fund=false
 
-      - name: Compile Windows app
-        run: npm run tauri -- build --no-bundle
+      - name: Compile Windows app (${{ matrix.profile }})
+        run: npm run tauri -- build ${{ matrix.tauri_args }} --no-bundle
 
       - name: Create release zip
         shell: pwsh
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          BUILD_PROFILE: ${{ matrix.profile }}
+          TARGET_DIR: ${{ matrix.target_dir }}
         run: |
           New-Item -ItemType Directory -Force -Path artifact\wuhu | Out-Null
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item src-tauri\target\release\wuhu.exe artifact\wuhu\wuhu.exe -Force
-          Compress-Archive -Path artifact\* -DestinationPath "release\wuhu-$env:RELEASE_TAG-windows-x64.zip" -Force
+          Copy-Item "src-tauri\target\$env:TARGET_DIR\wuhu.exe" artifact\wuhu\wuhu.exe -Force
+          Compress-Archive -Path artifact\* -DestinationPath "release\wuhu-$env:RELEASE_TAG-windows-x64-$env:BUILD_PROFILE.zip" -Force
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v6
         with:
-          name: wuhu-windows-x64
-          path: release/wuhu-*-windows-x64.zip
+          name: wuhu-windows-x64-${{ matrix.profile }}
+          path: release/wuhu-*-windows-x64-${{ matrix.profile }}.zip
           retention-days: 7
 
   macos-arm64:
-    name: Package macOS arm64
+    name: Package macOS arm64 (${{ matrix.profile }})
     runs-on: macos-26
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: release
+            tauri_args: ""
+            target_dir: release
+          - profile: debug
+            tauri_args: "--debug"
+            target_dir: debug
 
     steps:
       - name: Checkout
@@ -157,28 +180,31 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: macos-arm64-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          key: macos-arm64-${{ matrix.profile }}-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
           restore-keys: |
+            macos-arm64-${{ matrix.profile }}-cargo-
             macos-arm64-cargo-
 
       - name: Install npm dependencies
         run: npm ci --prefer-offline --no-audit --fund=false
 
-      - name: Compile macOS arm64 app
+      - name: Compile macOS arm64 app (${{ matrix.profile }})
         env:
           APPLE_SIGNING_IDENTITY: "-"
-        run: npm run tauri -- build --target aarch64-apple-darwin --bundles app --ci
+        run: npm run tauri -- build ${{ matrix.tauri_args }} --target aarch64-apple-darwin --bundles app --ci
 
       - name: Create release zip
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          BUILD_PROFILE: ${{ matrix.profile }}
+          TARGET_DIR: ${{ matrix.target_dir }}
         run: |
           set -euo pipefail
 
-          app_path="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/wuhu.app"
+          app_path="src-tauri/target/aarch64-apple-darwin/${TARGET_DIR}/bundle/macos/wuhu.app"
           if [ ! -d "$app_path" ]; then
-            app_path="src-tauri/target/release/bundle/macos/wuhu.app"
+            app_path="src-tauri/target/${TARGET_DIR}/bundle/macos/wuhu.app"
           fi
           if [ ! -d "$app_path" ]; then
             echo "wuhu.app not found" >&2
@@ -198,13 +224,13 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app_path"
 
           mkdir -p release
-          zip_path="$PWD/release/wuhu-${RELEASE_TAG}-macos-arm64.zip"
+          zip_path="$PWD/release/wuhu-${RELEASE_TAG}-macos-arm64-${BUILD_PROFILE}.zip"
           (
             cd "$(dirname "$app_path")"
             zip -qry -X --symlinks "$zip_path" "$(basename "$app_path")"
           )
 
-          zip_list="$(unzip -l "release/wuhu-${RELEASE_TAG}-macos-arm64.zip")"
+          zip_list="$(unzip -l "release/wuhu-${RELEASE_TAG}-macos-arm64-${BUILD_PROFILE}.zip")"
           for forbidden_entry in "__MACOSX/" "/._" "._wuhu" "._Info.plist"; do
             if [[ "$zip_list" == *"$forbidden_entry"* ]]; then
               echo "Unexpected metadata entry: $forbidden_entry" >&2
@@ -225,8 +251,8 @@ jobs:
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v6
         with:
-          name: wuhu-macos-arm64
-          path: release/wuhu-*-macos-arm64.zip
+          name: wuhu-macos-arm64-${{ matrix.profile }}
+          path: release/wuhu-*-macos-arm64-${{ matrix.profile }}.zip
           retention-days: 7
 
   publish:
@@ -246,16 +272,28 @@ jobs:
           name: release-notes
           path: release
 
-      - name: Download Windows artifact
+      - name: Download Windows release artifact
         uses: actions/download-artifact@v7
         with:
-          name: wuhu-windows-x64
+          name: wuhu-windows-x64-release
           path: release
 
-      - name: Download macOS artifact
+      - name: Download Windows debug artifact
         uses: actions/download-artifact@v7
         with:
-          name: wuhu-macos-arm64
+          name: wuhu-windows-x64-debug
+          path: release
+
+      - name: Download macOS release artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: wuhu-macos-arm64-release
+          path: release
+
+      - name: Download macOS debug artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: wuhu-macos-arm64-debug
           path: release
 
       - name: Publish release
@@ -268,8 +306,10 @@ jobs:
           set -euo pipefail
 
           files=(
-            "release/wuhu-${RELEASE_TAG}-windows-x64.zip"
-            "release/wuhu-${RELEASE_TAG}-macos-arm64.zip"
+            "release/wuhu-${RELEASE_TAG}-windows-x64-release.zip"
+            "release/wuhu-${RELEASE_TAG}-windows-x64-debug.zip"
+            "release/wuhu-${RELEASE_TAG}-macos-arm64-release.zip"
+            "release/wuhu-${RELEASE_TAG}-macos-arm64-debug.zip"
           )
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

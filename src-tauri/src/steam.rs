@@ -20,9 +20,13 @@ const OPENSTEAMTOOL_DLL_NAME: &str = "OpenSteamTool.dll";
 #[cfg(target_os = "macos")]
 const OPENSTEAMTOOL_DYLIB_NAME: &str = "libOpenSteamTool.dylib";
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
 const EMBEDDED_OPENSTEAMTOOL_DYLIB: &[u8] =
-    include_bytes!("../../resources/opensteamtool/libOpenSteamTool.dylib");
+    include_bytes!("../../resources/opensteamtool/macos/debug/libOpenSteamTool.dylib");
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+const EMBEDDED_OPENSTEAMTOOL_DYLIB: &[u8] =
+    include_bytes!("../../resources/opensteamtool/macos/release/libOpenSteamTool.dylib");
 
 #[cfg(windows)]
 struct EmbeddedToolFile {
@@ -30,19 +34,43 @@ struct EmbeddedToolFile {
     bytes: &'static [u8],
 }
 
+#[cfg(all(windows, debug_assertions))]
+const EMBEDDED_DWMAPI_DLL: &[u8] =
+    include_bytes!("../../resources/opensteamtool/windows/debug/dwmapi.dll");
+
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_DWMAPI_DLL: &[u8] =
+    include_bytes!("../../resources/opensteamtool/windows/release/dwmapi.dll");
+
+#[cfg(all(windows, debug_assertions))]
+const EMBEDDED_XINPUT_DLL: &[u8] =
+    include_bytes!("../../resources/opensteamtool/windows/debug/xinput1_4.dll");
+
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_XINPUT_DLL: &[u8] =
+    include_bytes!("../../resources/opensteamtool/windows/release/xinput1_4.dll");
+
+#[cfg(all(windows, debug_assertions))]
+const EMBEDDED_OPENSTEAMTOOL_DLL: &[u8] =
+    include_bytes!("../../resources/opensteamtool/windows/debug/OpenSteamTool.dll");
+
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_OPENSTEAMTOOL_DLL: &[u8] =
+    include_bytes!("../../resources/opensteamtool/windows/release/OpenSteamTool.dll");
+
 #[cfg(windows)]
 const EMBEDDED_TOOL_FILES: [EmbeddedToolFile; 3] = [
     EmbeddedToolFile {
         name: "dwmapi.dll",
-        bytes: include_bytes!("../../resources/opensteamtool/dwmapi.dll"),
+        bytes: EMBEDDED_DWMAPI_DLL,
     },
     EmbeddedToolFile {
         name: "xinput1_4.dll",
-        bytes: include_bytes!("../../resources/opensteamtool/xinput1_4.dll"),
+        bytes: EMBEDDED_XINPUT_DLL,
     },
     EmbeddedToolFile {
         name: "OpenSteamTool.dll",
-        bytes: include_bytes!("../../resources/opensteamtool/OpenSteamTool.dll"),
+        bytes: EMBEDDED_OPENSTEAMTOOL_DLL,
     },
 ];
 
