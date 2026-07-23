@@ -337,6 +337,41 @@ pub(crate) fn install_opensteamtool(store: &AppStore) -> Result<(), String> {
     }
 }
 
+pub(crate) fn ensure_opensteamtool_aligned(store: &AppStore) {
+    #[cfg(not(windows))]
+    {
+        let _ = store;
+    }
+
+    #[cfg(windows)]
+    {
+        let Some(steam_root) = configured_root(store) else {
+            return;
+        };
+        let Some(core_path) = opensteamtool_binary_path() else {
+            return;
+        };
+
+        if !windows_components_present(&steam_root, &core_path) {
+            return;
+        }
+
+        if let Some(binary_dir) = core_path.parent() {
+            let _ = fs::create_dir_all(binary_dir);
+        }
+
+        let _ = write_embedded_tool_file(&core_path, OPENSTEAMTOOL_DLL_NAME);
+        for file_name in PROXY_DLL_NAMES {
+            let _ = write_embedded_tool_file(&steam_root.join(file_name), file_name);
+        }
+
+        let legacy_core_path = steam_root.join(OPENSTEAMTOOL_DLL_NAME);
+        if legacy_core_path.exists() {
+            let _ = remove_component_file(&legacy_core_path, OPENSTEAMTOOL_DLL_NAME);
+        }
+    }
+}
+
 pub(crate) fn launch_steam_with_opensteamtool(store: &AppStore) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -493,26 +528,30 @@ pub(crate) fn install_status(store: &AppStore) -> InstallStatus {
             supported: false,
             launch_required: false,
             launched_via_wuhu: false,
+            update_available: false,
         };
     }
 
     #[cfg(windows)]
     {
-        let installed = configured_root(store)
+        let (installed, update_available) = configured_root(store)
             .zip(opensteamtool_binary_path())
             .map(|(steam_root, core_path)| {
-                core_path.exists()
-                    && PROXY_DLL_NAMES
-                        .iter()
-                        .all(|name| steam_root.join(name).exists())
+                let installed = windows_components_present(&steam_root, &core_path);
+                let update_available = installed
+                    && windows_component_targets(&steam_root, &core_path)
+                        .into_iter()
+                        .any(|(path, name)| !tool_file_matches_embedded(&path, name));
+                (installed, update_available)
             })
-            .unwrap_or(false);
+            .unwrap_or((false, false));
 
         InstallStatus {
             installed,
             supported: true,
             launch_required: false,
             launched_via_wuhu: false,
+            update_available,
         }
     }
 
@@ -527,6 +566,7 @@ pub(crate) fn install_status(store: &AppStore) -> InstallStatus {
             supported: true,
             launch_required: true,
             launched_via_wuhu: macos_launched_via_wuhu(),
+            update_available: false,
         }
     }
 }
@@ -996,9 +1036,38 @@ fn remove_macos_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+fn windows_component_targets(steam_root: &Path, core_path: &Path) -> Vec<(PathBuf, &'static str)> {
+    let mut targets = vec![(core_path.to_path_buf(), OPENSTEAMTOOL_DLL_NAME)];
+    for file_name in PROXY_DLL_NAMES {
+        targets.push((steam_root.join(file_name), file_name));
+    }
+    targets
+}
+
+#[cfg(windows)]
+fn windows_components_present(steam_root: &Path, core_path: &Path) -> bool {
+    windows_component_targets(steam_root, core_path)
+        .into_iter()
+        .all(|(path, _)| path.exists())
+}
+
+#[cfg(windows)]
+fn tool_file_matches_embedded(path: &Path, file_name: &str) -> bool {
+    let Some(embedded) = embedded_tool_file(file_name) else {
+        return false;
+    };
+    fs::read(path)
+        .map(|bytes| bytes.as_slice() == embedded)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
 fn write_embedded_tool_file(target: &Path, file_name: &str) -> Result<(), String> {
     let bytes = embedded_tool_file(file_name)
         .ok_or_else(|| format!("内置资源缺少 {file_name}，请重新构建 wuhu"))?;
+    if tool_file_matches_embedded(target, file_name) {
+        return Ok(());
+    }
     fs::write(target, bytes).map_err(|err| format!("安装 {file_name} 失败：{err}"))
 }
 

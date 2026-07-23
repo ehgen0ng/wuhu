@@ -70,6 +70,7 @@ pub(crate) struct InstallStatus {
     pub(crate) supported: bool,
     pub(crate) launch_required: bool,
     pub(crate) launched_via_wuhu: bool,
+    pub(crate) update_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

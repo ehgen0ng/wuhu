@@ -23,6 +23,7 @@ export type InstallStatus = {
   supported: boolean;
   launchRequired: boolean;
   launchedViaWuhu: boolean;
+  updateAvailable: boolean;
 };
 
 export type SteamClientStatus = {

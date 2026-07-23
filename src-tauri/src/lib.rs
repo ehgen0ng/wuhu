@@ -277,6 +277,7 @@ fn launch_steam_with_opensteamtool(_app: AppHandle) -> Result<AppState, String> 
 #[tauri::command]
 fn get_opensteamtool_status(_app: AppHandle) -> Result<InstallStatus, String> {
     let store = load_store()?;
+    steam::ensure_opensteamtool_aligned(&store);
     Ok(steam::install_status(&store))
 }
 

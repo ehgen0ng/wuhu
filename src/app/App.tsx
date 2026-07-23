@@ -847,7 +847,9 @@ export default function App() {
               "install",
               "settings",
               () => installOpenSteamTool(),
-              "安装完成。建议重启 Steam 后生效。",
+              state?.installStatus.updateAvailable
+                ? "组件已更新。建议重启 Steam 后生效。"
+                : "安装完成。建议重启 Steam 后生效。",
             )
           }
           onLaunchSteamWithOpenSteamTool={() =>

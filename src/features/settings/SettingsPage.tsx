@@ -83,6 +83,7 @@ export function SettingsPage({
   const componentInstallSupported = Boolean(state?.installStatus.supported);
   const launchRequired = Boolean(state?.installStatus.launchRequired);
   const launchedViaWuhu = Boolean(state?.installStatus.launchedViaWuhu);
+  const updateAvailable = Boolean(state?.installStatus.updateAvailable);
   const steamClientLockSupported = Boolean(state?.steamClient.lockSupported);
   const componentStatus = componentInstallSupported
     ? launchRequired
@@ -92,9 +93,16 @@ export function SettingsPage({
           ? "Steam 未通过 wuhu 启动"
           : "首次启动时自动准备"
       : state?.installStatus.installed
-        ? "已安装"
+        ? updateAvailable
+          ? "有更新"
+          : "已安装"
         : "未安装"
     : "不支持当前系统";
+  const componentDetail = launchRequired
+    ? "macOS 需要通过 wuhu 启动 Steam 才会加载组件"
+    : updateAvailable
+      ? "请退出 Steam 后点「更新」"
+      : undefined;
 
   return (
     <section className="page settings-page">
@@ -193,7 +201,7 @@ export function SettingsPage({
         <InfoTile
           label="当前状态"
           value={componentStatus}
-          detail={launchRequired ? "macOS 需要通过 wuhu 启动 Steam 才会加载组件" : undefined}
+          detail={componentDetail}
         />
 
         <Group mt="md" gap="sm">
@@ -207,7 +215,7 @@ export function SettingsPage({
               !componentInstallSupported || !hasSteamPath || (launchRequired && launchedViaWuhu)
             }
           >
-            {launchRequired ? "启动 Steam" : "安装"}
+            {launchRequired ? "启动 Steam" : updateAvailable ? "更新" : "安装"}
           </Button>
           <Button
             color="red"
