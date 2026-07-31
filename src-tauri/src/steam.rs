@@ -1314,6 +1314,7 @@ fn set_cloud_redirect_local_config(
         .ok_or_else(|| "CloudRedirect config.json 的根节点必须是对象".to_string())?;
     object.insert("provider".to_string(), serde_json::json!("folder"));
     object.insert("sync_path".to_string(), serde_json::json!(sync_path));
+    object.insert("sync_achievements".to_string(), serde_json::json!(true));
     if enable_auto_update {
         object.insert("auto_update_dll".to_string(), serde_json::json!(true));
     }
@@ -1378,7 +1379,7 @@ mod tests {
         let mut config = serde_json::json!({
             "provider": "gdrive",
             "token_paths": { "gdrive": "tokens.json" },
-            "sync_achievements": true
+            "sync_achievements": false
         });
 
         set_cloud_redirect_local_config(&mut config, r"C:\Apps\wuhu\data\cloudredirect", true)
@@ -1407,6 +1408,7 @@ mod tests {
             config["sync_path"],
             "/Users/test/Library/Application Support/wuhu/cloudredirect"
         );
+        assert_eq!(config["sync_achievements"], true);
         assert!(config.get("auto_update_dll").is_none());
     }
 
