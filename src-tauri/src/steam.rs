@@ -17,6 +17,9 @@ const PROXY_DLL_NAMES: [&str; 2] = ["dwmapi.dll", "xinput1_4.dll"];
 #[cfg(windows)]
 const OPENSTEAMTOOL_DLL_NAME: &str = "OpenSteamTool.dll";
 
+#[cfg(windows)]
+const CLOUD_REDIRECT_DLL_NAME: &str = "cloud_redirect.dll";
+
 #[cfg(target_os = "macos")]
 const OPENSTEAMTOOL_DYLIB_NAME: &str = "libOpenSteamTool.dylib";
 
@@ -57,6 +60,10 @@ const EMBEDDED_OPENSTEAMTOOL_DLL: &[u8] =
 #[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_OPENSTEAMTOOL_DLL: &[u8] =
     include_bytes!("../../resources/opensteamtool/windows/release/OpenSteamTool.dll");
+
+#[cfg(windows)]
+const EMBEDDED_CLOUD_REDIRECT_DLL: &[u8] =
+    include_bytes!("../../resources/cloudredirect/windows/cloud_redirect.dll");
 
 #[cfg(windows)]
 const EMBEDDED_TOOL_FILES: [EmbeddedToolFile; 3] = [
@@ -316,17 +323,29 @@ pub(crate) fn install_opensteamtool(store: &AppStore) -> Result<(), String> {
             "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
                 .to_string()
         })?;
+        let cloud_redirect_path = cloud_redirect_plugin_path().ok_or_else(|| {
+            "无法确定 CloudRedirect 插件目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
+                .to_string()
+        })?;
 
         if let Some(binary_dir) = core_path.parent() {
             fs::create_dir_all(binary_dir)
                 .map_err(|err| format!("创建 OpenSteamTool bin 目录失败：{err}"))?;
         }
+        if let Some(plugin_dir) = cloud_redirect_path.parent() {
+            fs::create_dir_all(plugin_dir)
+                .map_err(|err| format!("创建 OpenSteamTool plugins 目录失败：{err}"))?;
+        }
 
         write_embedded_tool_file(&core_path, OPENSTEAMTOOL_DLL_NAME)?;
+        write_cloud_redirect_if_missing(&cloud_redirect_path)?;
 
         for file_name in PROXY_DLL_NAMES {
             write_embedded_tool_file(&steam_root.join(file_name), file_name)?;
         }
+
+        enable_opensteamtool_cloud()?;
+        configure_cloud_redirect_local_folder()?;
 
         let legacy_core_path = steam_root.join(OPENSTEAMTOOL_DLL_NAME);
         if legacy_core_path.exists() {
@@ -467,6 +486,11 @@ pub(crate) fn restore_opensteamtool(store: &AppStore) -> Result<(), String> {
                 "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
                     .to_string(),
             ),
+        }
+        if let Some(plugin_path) = cloud_redirect_plugin_path() {
+            if let Err(err) = remove_component_file(&plugin_path, CLOUD_REDIRECT_DLL_NAME) {
+                errors.push(err);
+            }
         }
 
         if !errors.is_empty() {
@@ -848,6 +872,28 @@ fn opensteamtool_binary_path() -> Option<PathBuf> {
     Some(data_root.join("bin").join(OPENSTEAMTOOL_DLL_NAME))
 }
 
+#[cfg(windows)]
+fn cloud_redirect_plugin_path() -> Option<PathBuf> {
+    Some(
+        opensteamtool_data_root()?
+            .join("plugins")
+            .join(CLOUD_REDIRECT_DLL_NAME),
+    )
+}
+
+#[cfg(windows)]
+fn opensteamtool_config_path() -> Option<PathBuf> {
+    Some(opensteamtool_data_root()?.join("opensteamtool.toml"))
+}
+
+#[cfg(windows)]
+fn cloud_redirect_config_path() -> Option<PathBuf> {
+    env::var_os("APPDATA")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.join("CloudRedirect").join("config.json"))
+}
+
 #[cfg(target_os = "macos")]
 fn opensteamtool_binary_path() -> Option<PathBuf> {
     Some(
@@ -1049,6 +1095,7 @@ fn windows_components_present(steam_root: &Path, core_path: &Path) -> bool {
     windows_component_targets(steam_root, core_path)
         .into_iter()
         .all(|(path, _)| path.exists())
+        && cloud_redirect_plugin_path().is_some_and(|path| path.is_file())
 }
 
 #[cfg(windows)]
@@ -1072,6 +1119,149 @@ fn write_embedded_tool_file(target: &Path, file_name: &str) -> Result<(), String
 }
 
 #[cfg(windows)]
+fn write_cloud_redirect_if_missing(target: &Path) -> Result<(), String> {
+    if target.is_file() {
+        return Ok(());
+    }
+
+    fs::write(target, EMBEDDED_CLOUD_REDIRECT_DLL)
+        .map_err(|err| format!("安装 {CLOUD_REDIRECT_DLL_NAME} 失败：{err}"))
+}
+
+#[cfg(windows)]
+fn enable_opensteamtool_cloud() -> Result<(), String> {
+    let config_path = opensteamtool_config_path().ok_or_else(|| {
+        "无法确定 OpenSteamTool 配置目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
+            .to_string()
+    })?;
+    let existing = if config_path.exists() {
+        fs::read_to_string(&config_path)
+            .map_err(|err| format!("读取 opensteamtool.toml 失败：{err}"))?
+    } else {
+        String::new()
+    };
+    let updated = set_cloud_enabled(&existing);
+    if updated == existing {
+        return Ok(());
+    }
+
+    fs::write(&config_path, updated).map_err(|err| format!("写入 opensteamtool.toml 失败：{err}"))
+}
+
+#[cfg(any(windows, test))]
+fn set_cloud_enabled(content: &str) -> String {
+    let newline = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut lines = content
+        .lines()
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect::<Vec<_>>();
+
+    let cloud_start = lines
+        .iter()
+        .position(|line| line.split('#').next().unwrap_or("").trim() == "[cloud]");
+
+    if let Some(start) = cloud_start {
+        let end = lines
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, line)| {
+                let value = line.split('#').next().unwrap_or("").trim();
+                value.starts_with('[') && value.ends_with(']')
+            })
+            .map(|(index, _)| index)
+            .unwrap_or(lines.len());
+
+        let enabled_line = (start + 1..end).find(|&index| {
+            lines[index]
+                .split('#')
+                .next()
+                .and_then(|line| line.split_once('='))
+                .is_some_and(|(key, _)| key.trim() == "enabled")
+        });
+
+        if let Some(index) = enabled_line {
+            let indentation = lines[index]
+                .chars()
+                .take_while(|ch| ch.is_whitespace())
+                .collect::<String>();
+            let comment = lines[index]
+                .find('#')
+                .map(|offset| format!(" {}", &lines[index][offset..]))
+                .unwrap_or_default();
+            lines[index] = format!("{indentation}enabled = true{comment}");
+        } else {
+            lines.insert(start + 1, "enabled = true".to_string());
+        }
+    } else {
+        if lines.last().is_some_and(|line| !line.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("[cloud]".to_string());
+        lines.push("enabled = true".to_string());
+    }
+
+    let mut updated = lines.join(newline);
+    updated.push_str(newline);
+    updated
+}
+
+#[cfg(windows)]
+fn configure_cloud_redirect_local_folder() -> Result<(), String> {
+    let config_path = cloud_redirect_config_path()
+        .ok_or_else(|| "无法确定 CloudRedirect 配置目录：环境变量 APPDATA 未设置".to_string())?;
+    let sync_path = opensteamtool_data_root()
+        .ok_or_else(|| {
+            "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
+                .to_string()
+        })?
+        .join("data")
+        .join("CloudRedirect");
+    fs::create_dir_all(&sync_path)
+        .map_err(|err| format!("创建 CloudRedirect 本地同步目录失败：{err}"))?;
+    let sync_path = sync_path
+        .to_str()
+        .ok_or_else(|| "CloudRedirect 本地同步目录不是有效的 Unicode 路径".to_string())?;
+
+    let mut config = if config_path.exists() {
+        let existing = fs::read_to_string(&config_path)
+            .map_err(|err| format!("读取 CloudRedirect config.json 失败：{err}"))?;
+        serde_json::from_str(&existing)
+            .map_err(|err| format!("解析 CloudRedirect config.json 失败：{err}"))?
+    } else {
+        serde_json::Value::Object(serde_json::Map::new())
+    };
+    set_cloud_redirect_local_config(&mut config, sync_path)?;
+
+    if let Some(config_dir) = config_path.parent() {
+        fs::create_dir_all(config_dir)
+            .map_err(|err| format!("创建 CloudRedirect 配置目录失败：{err}"))?;
+    }
+    let serialized = serde_json::to_string_pretty(&config)
+        .map_err(|err| format!("序列化 CloudRedirect config.json 失败：{err}"))?;
+    fs::write(&config_path, format!("{serialized}\n"))
+        .map_err(|err| format!("写入 CloudRedirect config.json 失败：{err}"))
+}
+
+#[cfg(any(windows, test))]
+fn set_cloud_redirect_local_config(
+    config: &mut serde_json::Value,
+    sync_path: &str,
+) -> Result<(), String> {
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| "CloudRedirect config.json 的根节点必须是对象".to_string())?;
+    object.insert("provider".to_string(), serde_json::json!("folder"));
+    object.insert("sync_path".to_string(), serde_json::json!(sync_path));
+    object.insert("auto_update_dll".to_string(), serde_json::json!(true));
+    Ok(())
+}
+
+#[cfg(windows)]
 fn embedded_tool_file(file_name: &str) -> Option<&'static [u8]> {
     EMBEDDED_TOOL_FILES
         .iter()
@@ -1081,7 +1271,10 @@ fn embedded_tool_file(file_name: &str) -> Option<&'static [u8]> {
 
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod tests {
-    use super::{has_config_value, remove_client_lock_lines};
+    use super::{
+        has_config_value, remove_client_lock_lines, set_cloud_enabled,
+        set_cloud_redirect_local_config,
+    };
 
     #[test]
     fn client_lock_config_is_case_insensitive_and_preserves_other_settings() {
@@ -1094,6 +1287,55 @@ mod tests {
             "enable"
         ));
         assert_eq!(remove_client_lock_lines(content), vec!["Universe=Public"]);
+    }
+
+    #[test]
+    fn cloud_config_is_created_when_opensteamtool_config_is_empty() {
+        assert_eq!(set_cloud_enabled(""), "[cloud]\nenabled = true\n");
+    }
+
+    #[test]
+    fn cloud_config_is_appended_without_changing_other_sections() {
+        let content = "[log]\nlevel = \"info\"\n";
+
+        assert_eq!(
+            set_cloud_enabled(content),
+            "[log]\nlevel = \"info\"\n\n[cloud]\nenabled = true\n"
+        );
+    }
+
+    #[test]
+    fn cloud_config_enables_existing_section_and_preserves_comment_style() {
+        let content = "[cloud]\r\n  enabled = false # user setting\r\n\r\n[remote]\r\n";
+
+        assert_eq!(
+            set_cloud_enabled(content),
+            "[cloud]\r\n  enabled = true # user setting\r\n\r\n[remote]\r\n"
+        );
+    }
+
+    #[test]
+    fn cloud_redirect_local_config_preserves_unmanaged_fields() {
+        let mut config = serde_json::json!({
+            "provider": "gdrive",
+            "token_paths": { "gdrive": "tokens.json" },
+            "sync_achievements": true
+        });
+
+        set_cloud_redirect_local_config(
+            &mut config,
+            r"C:\Users\tester\AppData\Local\OpenSteamTool\data\CloudRedirect",
+        )
+        .expect("CloudRedirect config should be updated");
+
+        assert_eq!(config["provider"], "folder");
+        assert_eq!(
+            config["sync_path"],
+            r"C:\Users\tester\AppData\Local\OpenSteamTool\data\CloudRedirect"
+        );
+        assert_eq!(config["auto_update_dll"], true);
+        assert_eq!(config["token_paths"]["gdrive"], "tokens.json");
+        assert_eq!(config["sync_achievements"], true);
     }
 
     #[cfg(target_os = "macos")]
