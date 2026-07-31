@@ -1214,13 +1214,7 @@ fn set_cloud_enabled(content: &str) -> String {
 fn configure_cloud_redirect_local_folder() -> Result<(), String> {
     let config_path = cloud_redirect_config_path()
         .ok_or_else(|| "无法确定 CloudRedirect 配置目录：环境变量 APPDATA 未设置".to_string())?;
-    let sync_path = opensteamtool_data_root()
-        .ok_or_else(|| {
-            "无法确定 OpenSteamTool 数据目录：环境变量 OST_DATA_DIR 和 LOCALAPPDATA 均未设置"
-                .to_string()
-        })?
-        .join("data")
-        .join("CloudRedirect");
+    let sync_path = crate::store::portable_data_dir()?;
     fs::create_dir_all(&sync_path)
         .map_err(|err| format!("创建 CloudRedirect 本地同步目录失败：{err}"))?;
     let sync_path = sync_path
@@ -1322,17 +1316,11 @@ mod tests {
             "sync_achievements": true
         });
 
-        set_cloud_redirect_local_config(
-            &mut config,
-            r"C:\Users\tester\AppData\Local\OpenSteamTool\data\CloudRedirect",
-        )
-        .expect("CloudRedirect config should be updated");
+        set_cloud_redirect_local_config(&mut config, r"C:\Apps\wuhu\data")
+            .expect("CloudRedirect config should be updated");
 
         assert_eq!(config["provider"], "folder");
-        assert_eq!(
-            config["sync_path"],
-            r"C:\Users\tester\AppData\Local\OpenSteamTool\data\CloudRedirect"
-        );
+        assert_eq!(config["sync_path"], r"C:\Apps\wuhu\data");
         assert_eq!(config["auto_update_dll"], true);
         assert_eq!(config["token_paths"]["gdrive"], "tokens.json");
         assert_eq!(config["sync_achievements"], true);

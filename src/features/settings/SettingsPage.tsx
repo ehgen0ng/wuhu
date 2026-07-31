@@ -139,6 +139,41 @@ export function SettingsPage({
         </Group>
       </SettingSection>
 
+      <SettingSection icon={Wrench} title={launchRequired ? "Steam 启动" : "组件安装"}>
+        <InfoTile
+          label="当前状态"
+          value={componentStatus}
+          detail={componentDetail}
+        />
+
+        <Group mt="md" gap="sm">
+          <Button
+            color="steam"
+            variant="filled"
+            c="#06121e"
+            leftSection={launchRequired ? <Play size={18} /> : <CheckCircle2 size={18} />}
+            onClick={launchRequired ? onLaunchSteamWithOpenSteamTool : onInstallOpenSteamTool}
+            disabled={
+              !componentInstallSupported || !hasSteamPath || (launchRequired && launchedViaWuhu)
+            }
+          >
+            {launchRequired ? "启动 Steam" : updateAvailable ? "更新" : "安装"}
+          </Button>
+          <Button
+            color="red"
+            variant="subtle"
+            onClick={onRestoreOpenSteamTool}
+            disabled={
+              !componentInstallSupported ||
+              !state?.installStatus.installed ||
+              (launchRequired && launchedViaWuhu)
+            }
+          >
+            恢复
+          </Button>
+        </Group>
+      </SettingSection>
+
       <SettingSection
         icon={KeyRound}
         title="Hubcap Key"
@@ -193,41 +228,6 @@ export function SettingsPage({
             onClick={onSaveDepotboxKey}
           >
             保存
-          </Button>
-        </Group>
-      </SettingSection>
-
-      <SettingSection icon={Wrench} title={launchRequired ? "Steam 启动" : "组件安装"}>
-        <InfoTile
-          label="当前状态"
-          value={componentStatus}
-          detail={componentDetail}
-        />
-
-        <Group mt="md" gap="sm">
-          <Button
-            color="steam"
-            variant="filled"
-            c="#06121e"
-            leftSection={launchRequired ? <Play size={18} /> : <CheckCircle2 size={18} />}
-            onClick={launchRequired ? onLaunchSteamWithOpenSteamTool : onInstallOpenSteamTool}
-            disabled={
-              !componentInstallSupported || !hasSteamPath || (launchRequired && launchedViaWuhu)
-            }
-          >
-            {launchRequired ? "启动 Steam" : updateAvailable ? "更新" : "安装"}
-          </Button>
-          <Button
-            color="red"
-            variant="subtle"
-            onClick={onRestoreOpenSteamTool}
-            disabled={
-              !componentInstallSupported ||
-              !state?.installStatus.installed ||
-              (launchRequired && launchedViaWuhu)
-            }
-          >
-            恢复
           </Button>
         </Group>
       </SettingSection>
