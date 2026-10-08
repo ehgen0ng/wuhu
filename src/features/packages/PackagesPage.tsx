@@ -1,3 +1,5 @@
+import { useLanguage } from "../../app/LanguageProvider";
+import { t } from "../../i18n";
 import { Box, Button, Group, Loader, SimpleGrid, Stack, Text, TextInput, ThemeIcon, Title } from "@mantine/core";
 import { PackagePlus, RefreshCcw, Search, Upload } from "lucide-react";
 import type { FormEvent } from "react";
@@ -52,6 +54,7 @@ export function PackagesPage({
   onTogglePackage,
   onDeletePackage,
 }: PackagesPageProps) {
+  const { locale } = useLanguage();
   const isRefreshing = busy === "refresh";
   const isCheckingUpdates = busy === "check-package-updates";
   const isImporting = busy === "import";
@@ -59,7 +62,7 @@ export function PackagesPage({
   return (
     <Box component="section" className="page">
       <PageHeader
-        title="清单管理"
+        title={t(locale, "nav.packages")}
         actions={
           <>
             <Button
@@ -68,7 +71,7 @@ export function PackagesPage({
               aria-busy={isRefreshing}
               onClick={onRefresh}
             >
-              刷新
+              {t(locale, "common.refresh")}
             </Button>
             <Button
               variant="light"
@@ -77,7 +80,7 @@ export function PackagesPage({
               onClick={onCheckPackageUpdates}
               disabled={!packages.length || isCheckingUpdates}
             >
-              检查更新
+              {t(locale, "common.checkUpdates")}
             </Button>
             <Button
               color="steam"
@@ -88,7 +91,7 @@ export function PackagesPage({
               disabled={isImporting}
               onClick={onImportFile}
             >
-              导入清单
+              {t(locale, "packages.import")}
             </Button>
           </>
         }
@@ -99,6 +102,7 @@ export function PackagesPage({
       <Box component="form" mb="xl" onSubmit={onSearch}>
         <Group align="stretch" gap="sm" wrap="nowrap" className="responsive-control-row">
           <TextInput
+            aria-label={t(locale, "common.search")}
             value={searchTerm}
             onChange={(event) => onSearchTermChange(event.currentTarget.value)}
             leftSection={<Search size={17} />}
@@ -113,14 +117,14 @@ export function PackagesPage({
             aria-busy={isSearching}
             disabled={!searchTerm.trim()}
           >
-            搜索
+            {t(locale, "common.search")}
           </Button>
         </Group>
       </Box>
 
       {hasSearched && searchResults.length > 0 && (
         <Box component="section" mb={28}>
-          <SectionHeading title="搜索结果" meta={`${searchResults.length} 个结果`} />
+          <SectionHeading title={t(locale, "search.results")} meta={t(locale, "search.resultCount", { count: searchResults.length })} />
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="lg">
             {searchResults.map((item, index) => {
               const existingPackage = packages.find((pkg) => pkg.appId === item.id || pkg.id === item.id.toString());
@@ -141,7 +145,7 @@ export function PackagesPage({
 
       {packages.length > 0 && (
         <Box component="section" className={hasSearched && searchResults.length > 0 ? "saved-section" : undefined}>
-          <SectionHeading title="已保存清单" meta={`${packages.length} 个清单`} />
+          <SectionHeading title={t(locale, "packages.saved")} meta={t(locale, "packages.count", { count: packages.length })} />
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="lg">
             {packages.map((pkg, index) => (
               <SavedPackageCard
@@ -167,10 +171,10 @@ export function PackagesPage({
             <Upload size={30} />
           </ThemeIcon>
           <Title order={2} size={22}>
-            还没有清单
+            {t(locale, "packages.empty")}
           </Title>
           <Text c="dimmed" size="sm">
-            导入 zip 或搜索游戏添加。
+            {t(locale, "packages.emptyHint")}
           </Text>
         </Stack>
       )}

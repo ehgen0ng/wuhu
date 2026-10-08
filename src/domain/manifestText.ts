@@ -1,8 +1,10 @@
+import { t, type Locale } from "../i18n";
+import { renderError } from "../i18n/errors";
 import type { SteamSearchResult } from "../types";
 import { formatFileSize, formatManifestTime } from "./display";
 import { canAddManifest } from "./manifest";
 
-export function manifestStatusText(item: SteamSearchResult) {
+export function manifestStatusText(item: SteamSearchResult, locale: Locale) {
   if (!item.manifestChecked) return null;
   const status = item.manifestStatus;
   if (!status) return null;
@@ -10,21 +12,21 @@ export function manifestStatusText(item: SteamSearchResult) {
   if (!canAddManifest(item)) return null;
   const size = formatFileSize(status.fileSize);
   if (!status.fileModified) {
-    return `清单可用 · 更新时间未知${size ? ` · ${size}` : ""}`;
+    return t(locale, "manifest.availableSummary", { size: size ? ` · ${size}` : "" });
   }
-  return `清单更新：${formatManifestTime(status.fileModified)}${size ? ` · ${size}` : ""}`;
+  return t(locale, "manifest.updatedSummary", { time: formatManifestTime(status.fileModified, locale), size: size ? ` · ${size}` : "" });
 }
 
-export function manifestIssueText(item: SteamSearchResult) {
+export function manifestIssueText(item: SteamSearchResult, locale: Locale) {
   if (canAddManifest(item)) return null;
-  if (item.manifestChecking) return "正在检查清单...";
-  if (!item.manifestChecked) return "未检查清单：请先保存 Key。";
+  if (item.manifestChecking) return t(locale, "manifest.checking");
+  if (!item.manifestChecked) return t(locale, "manifest.notChecked");
 
   const status = item.manifestStatus;
-  if (!status) return "清单状态未知，请稍后重试。";
-  if (status.error) return status.error;
-  if (status.updateInProgress) return "清单正在更新，稍后再试。";
-  if (!status.manifestFileExists) return "暂未找到可用清单。";
-  if (status.status) return `清单状态：${status.status}`;
-  return "当前没有可用清单。";
+  if (!status) return t(locale, "manifest.unknown");
+  if (status.error) return renderError(locale, status.error);
+  if (status.updateInProgress) return t(locale, "manifest.updating");
+  if (!status.manifestFileExists) return t(locale, "manifest.notFound");
+  if (status.status) return t(locale, "manifest.status", { status: status.status });
+  return t(locale, "manifest.unavailable");
 }

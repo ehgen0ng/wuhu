@@ -1,3 +1,5 @@
+import { useLanguage } from "./LanguageProvider";
+import { t } from "../i18n";
 import { AppShell, Box, Group, Image, NavLink, Stack, Text, ThemeIcon } from "@mantine/core";
 import { Archive, KeyRound, Settings } from "lucide-react";
 import type { ReactNode } from "react";
@@ -25,17 +27,18 @@ export function AppLayout({
   onPageChange,
   children,
 }: AppLayoutProps) {
+  const { locale } = useLanguage();
   const statusText = hasLoadedState
     ? installSupported
       ? launchRequired
         ? launchedViaWuhu
-          ? "Steam 已通过 wuhu 启动"
-          : "Steam 未通过 wuhu 启动"
+          ? t(locale, "steam.launched")
+          : t(locale, "steam.notLaunched")
         : installed
-          ? "组件已安装"
-          : "等待安装组件"
-      : "组件不支持当前系统"
-    : "状态未读取";
+          ? t(locale, "component.installedStatus")
+          : t(locale, "component.awaiting")
+      : t(locale, "component.unsupported")
+    : t(locale, "common.notLoaded");
   const statusColor = installSupported
     ? launchRequired
       ? launchedViaWuhu
@@ -59,7 +62,7 @@ export function AppLayout({
             <NavLink
               active={page === "packages"}
               className="app-nav-link"
-              label="清单管理"
+              label={t(locale, "nav.packages")}
               leftSection={<Archive size={19} />}
               onClick={() => onPageChange("packages")}
               variant="light"
@@ -67,7 +70,7 @@ export function AppLayout({
             <NavLink
               active={page === "tickets"}
               className="app-nav-link"
-              label="D 加密管理"
+              label={t(locale, "nav.tickets")}
               leftSection={<KeyRound size={19} />}
               onClick={() => onPageChange("tickets")}
               variant="light"
@@ -75,7 +78,7 @@ export function AppLayout({
             <NavLink
               active={page === "settings"}
               className="app-nav-link"
-              label="设置"
+              label={t(locale, "nav.settings")}
               leftSection={<Settings size={19} />}
               onClick={() => onPageChange("settings")}
               variant="light"

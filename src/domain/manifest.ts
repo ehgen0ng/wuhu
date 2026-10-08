@@ -1,5 +1,6 @@
+import { message } from "../i18n";
 import type { ManifestStatus, PackageItem, PackageUpdateCheck, SteamSearchResult } from "../types";
-import { formatFileSize, formatManifestTime } from "./display";
+import { formatFileSize } from "./display";
 
 export function isManifestAvailable(status: ManifestStatus | null | undefined) {
   return Boolean(
@@ -35,7 +36,7 @@ export function buildPackageUpdateCheck(
       checkedAt,
       hasUpdate: false,
       kind: "error",
-      message: "清单状态未知，请稍后重试。",
+      message: message("manifest.unknown"),
     };
   }
 
@@ -55,7 +56,7 @@ export function buildPackageUpdateCheck(
       checkedAt,
       hasUpdate: false,
       kind: "warning",
-      message: "清单正在更新，稍后再试。",
+      message: message("manifest.updating"),
     };
   }
 
@@ -65,7 +66,7 @@ export function buildPackageUpdateCheck(
       checkedAt,
       hasUpdate: false,
       kind: "info",
-      message: "暂未找到可用清单。",
+      message: message("manifest.notFound"),
     };
   }
 
@@ -75,22 +76,24 @@ export function buildPackageUpdateCheck(
       checkedAt,
       hasUpdate: false,
       kind: "warning",
-      message: status.status ? `清单状态：${status.status}` : "当前没有可用清单。",
+      message: status.status ? message("manifest.status", { status: status.status }) : message("manifest.unavailable"),
     };
   }
 
   const size = formatFileSize(status.fileSize);
   const suffix = size ? ` · ${size}` : "";
   const hasUpdate = hasPackageManifestUpdate(pkg, status);
+  const remoteTime = status.fileModified && !Number.isNaN(Date.parse(status.fileModified))
+    ? new Date(status.fileModified)
+    : status.fileModified ?? message("common.unknown");
 
   if (hasUpdate) {
-    const remoteTime = formatManifestTime(status.fileModified);
     return {
       status,
       checkedAt,
       hasUpdate,
       kind: "warning",
-      message: `发现更新：${remoteTime}${suffix}`,
+      message: message("manifest.updateFound", { time: remoteTime, size: suffix }),
     };
   }
 
@@ -100,18 +103,17 @@ export function buildPackageUpdateCheck(
       checkedAt,
       hasUpdate: false,
       kind: "success",
-      message: `清单可用，更新时间未知${suffix}。`,
+      message: message("manifest.availableUnknown", { size: suffix }),
     };
   }
 
-  const remoteTime = formatManifestTime(status.fileModified);
   if (!pkg.manifestUpdatedAt) {
     return {
       status,
       checkedAt,
       hasUpdate: false,
       kind: "info",
-      message: `远端清单：${remoteTime}${suffix}，本地版本未知。`,
+      message: message("manifest.remoteUnknown", { time: remoteTime, size: suffix }),
     };
   }
 
@@ -120,6 +122,6 @@ export function buildPackageUpdateCheck(
     checkedAt,
     hasUpdate: false,
     kind: "success",
-    message: `已是最新：${remoteTime}${suffix}`,
+    message: message("manifest.latest", { time: remoteTime, size: suffix }),
   };
 }

@@ -1,3 +1,5 @@
+import { useLanguage } from "../../app/LanguageProvider";
+import { t, formatDateTime, type Locale } from "../../i18n";
 import {
   ActionIcon,
   Box,
@@ -44,19 +46,20 @@ export function TicketsPage({
   onExport,
   onDelete,
 }: TicketsPageProps) {
+  const { locale } = useLanguage();
   const [extractOpened, setExtractOpened] = useState(false);
   const [extractAppId, setExtractAppId] = useState("");
   const [extractError, setExtractError] = useState<string | null>(null);
   const isExtracting = busy === "extract-ticket";
   const isImporting = busy === "import-ticket";
   const isRefreshing = busy === "refresh";
-  const rows = [...tickets].sort((left, right) => left.title.localeCompare(right.title, "zh-CN"));
+  const rows = [...tickets].sort((left, right) => left.title.localeCompare(right.title, locale));
 
   function submitExtract(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const appId = Number(extractAppId.trim());
     if (!Number.isInteger(appId) || appId <= 0) {
-      setExtractError("AppID 必须是正整数。");
+      setExtractError(t(locale, "tickets.invalidAppId"));
       return;
     }
 
@@ -69,6 +72,7 @@ export function TicketsPage({
     <Box component="section" className="page">
       <Modal
         centered
+        closeButtonProps={{ "aria-label": t(locale, "common.close") }}
         classNames={{
           body: "ticket-extract-modal__body",
           close: "ticket-extract-modal__close",
@@ -79,7 +83,7 @@ export function TicketsPage({
         opened={extractOpened}
         overlayProps={{ backgroundOpacity: 0.58, blur: 3 }}
         onClose={() => setExtractOpened(false)}
-        title="提取 Ticket"
+        title={t(locale, "tickets.extractTitle")}
       >
         <form onSubmit={submitExtract}>
           <Stack gap="md">
@@ -96,7 +100,7 @@ export function TicketsPage({
             />
             <Group justify="flex-end" gap="sm">
               <Button variant="subtle" onClick={() => setExtractOpened(false)}>
-                取消
+                {t(locale, "common.cancel")}
               </Button>
               <Button
                 color="steam"
@@ -105,7 +109,7 @@ export function TicketsPage({
                 loading={isExtracting}
                 disabled={isExtracting}
               >
-                提取
+                {t(locale, "tickets.extract")}
               </Button>
             </Group>
           </Stack>
@@ -113,7 +117,7 @@ export function TicketsPage({
       </Modal>
 
       <PageHeader
-        title="D 加密管理"
+        title={t(locale, "nav.tickets")}
         actions={
           <>
             <Button
@@ -122,7 +126,7 @@ export function TicketsPage({
               aria-busy={isRefreshing}
               onClick={onRefresh}
             >
-              刷新
+              {t(locale, "common.refresh")}
             </Button>
             <Button
               variant="light"
@@ -131,7 +135,7 @@ export function TicketsPage({
               aria-busy={isExtracting}
               onClick={() => setExtractOpened(true)}
             >
-              提取
+              {t(locale, "tickets.extract")}
             </Button>
             <Button
               color="steam"
@@ -142,7 +146,7 @@ export function TicketsPage({
               disabled={isImporting}
               onClick={onImport}
             >
-              导入Ticket
+              {t(locale, "tickets.import")}
             </Button>
           </>
         }
@@ -155,12 +159,12 @@ export function TicketsPage({
           <Table className="ticket-table" verticalSpacing="sm">
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>游戏</Table.Th>
+                <Table.Th>{t(locale, "tickets.game")}</Table.Th>
                 <Table.Th>AppID</Table.Th>
                 <Table.Th>AppTicket</Table.Th>
                 <Table.Th>ETicket</Table.Th>
-                <Table.Th>过期时间</Table.Th>
-                <Table.Th className="ticket-actions-head">操作</Table.Th>
+                <Table.Th>{t(locale, "tickets.expires")}</Table.Th>
+                <Table.Th className="ticket-actions-head">{t(locale, "common.actions")}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -180,29 +184,29 @@ export function TicketsPage({
                         {ticket.appId}
                       </Text>
                     </Table.Td>
-                    <Table.Td>{ticketMark(ticket.hasAppTicket)}</Table.Td>
-                    <Table.Td>{ticketMark(ticket.hasETicket)}</Table.Td>
+                    <Table.Td>{ticketMark(ticket.hasAppTicket, locale)}</Table.Td>
+                    <Table.Td>{ticketMark(ticket.hasETicket, locale)}</Table.Td>
                     <Table.Td>
                       <Text c={isExpired(ticket.expiresAt) ? "red.3" : "dimmed"} size="sm">
-                        {formatExpiry(ticket.expiresAt)}
+                        {formatExpiry(ticket.expiresAt, locale)}
                       </Text>
                     </Table.Td>
                     <Table.Td>
                       <Group gap={6} justify="flex-end" wrap="nowrap">
-                        <Tooltip label="导出 tickets.txt">
+                        <Tooltip label={t(locale, "tickets.exportFile")}>
                           <ActionIcon
                             variant="light"
-                            aria-label="导出 tickets.txt"
+                            aria-label={t(locale, "tickets.exportFile")}
                             disabled={exportBusy}
                             onClick={() => onExport(ticket)}
                           >
                             {exportBusy ? <Loader color="steam" size={16} /> : <Download size={16} />}
                           </ActionIcon>
                         </Tooltip>
-                        <Tooltip label="删除 Ticket">
+                        <Tooltip label={t(locale, "tickets.delete")}>
                           <ActionIcon
                             variant="light"
-                            aria-label="删除 Ticket"
+                            aria-label={t(locale, "tickets.delete")}
                             disabled={deleteBusy}
                             onClick={() => onDelete(ticket)}
                           >
@@ -224,10 +228,10 @@ export function TicketsPage({
               <KeyRound size={30} />
             </ThemeIcon>
             <Title order={2} size={22}>
-              还没有 Ticket
+              {t(locale, "tickets.empty")}
             </Title>
             <Text c="dimmed" size="sm">
-              点击右上角提取，或导入已有 tickets.txt。
+              {t(locale, "tickets.emptyHint")}
             </Text>
           </Stack>
         )
@@ -236,24 +240,18 @@ export function TicketsPage({
   );
 }
 
-function ticketMark(enabled: boolean) {
+function ticketMark(enabled: boolean, locale: Locale) {
   return enabled ? (
-    <CheckCircle2 className="ticket-mark ticket-mark--ok" size={20} aria-label="存在" />
+    <CheckCircle2 className="ticket-mark ticket-mark--ok" size={20} aria-label={t(locale, "common.present")} />
   ) : (
-    <XCircle className="ticket-mark ticket-mark--missing" size={20} aria-label="缺失" />
+    <XCircle className="ticket-mark ticket-mark--missing" size={20} aria-label={t(locale, "common.missing")} />
   );
 }
 
-function formatExpiry(value: number | null | undefined) {
-  if (!value) return "未知";
+function formatExpiry(value: number | null | undefined, locale: Locale) {
+  if (!value) return t(locale, "common.unknown");
   const date = new Date(value * 1000);
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDateTime(locale, date);
 }
 
 function isExpired(value: number | null | undefined) {

@@ -1,3 +1,5 @@
+import { message } from "../../i18n";
+import { LocalizedError } from "../../i18n/errors";
 import { isManifestAvailable } from "../../domain/manifest";
 import type { AppSettings, ManifestStatus } from "../../types";
 import { depotboxManifestSource } from "./depotbox";
@@ -17,7 +19,7 @@ export async function fetchPreferredManifestStatuses(appIds: number[], settings:
 
   const configuredSources = manifestSources.filter((source) => source.isConfigured(settings));
   if (!configuredSources.length) {
-    throw new Error("请先在设置里保存 Key。");
+    throw new LocalizedError(message("settings.keyRequired"));
   }
 
   const [primarySource, ...fallbackSources] = configuredSources;
@@ -44,7 +46,7 @@ async function fetchFirstAvailableStatuses(appIds: number[], sources: ManifestSo
     }
   }
 
-  throw lastError ?? new Error("清单状态未知，请稍后重试。");
+  throw lastError ?? new LocalizedError(message("manifest.unknown"));
 }
 
 async function mergeFallbackStatuses(

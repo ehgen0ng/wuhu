@@ -1,3 +1,5 @@
+import { useLanguage } from "../../app/LanguageProvider";
+import { t } from "../../i18n";
 import {
   ActionIcon,
   Badge,
@@ -15,6 +17,7 @@ import {
   FolderOpen,
   Info,
   KeyRound,
+  Languages,
   LockKeyhole,
   Play,
   RefreshCcw,
@@ -78,6 +81,7 @@ export function SettingsPage({
   onRestoreOpenSteamTool,
   onToggleSteamClientLock,
 }: SettingsPageProps) {
+  const { locale, setLocale } = useLanguage();
   const hasSteamPath = Boolean(state?.settings.steamPath);
   const hasSavedHubcapKey = Boolean(state?.settings.hubcapApiKey?.trim());
   const componentInstallSupported = Boolean(state?.installStatus.supported);
@@ -88,34 +92,48 @@ export function SettingsPage({
   const componentStatus = componentInstallSupported
     ? launchRequired
       ? launchedViaWuhu
-        ? "Steam 已通过 wuhu 启动"
+        ? t(locale, "steam.launched")
         : state?.installStatus.installed
-          ? "Steam 未通过 wuhu 启动"
-          : "首次启动时自动准备"
+          ? t(locale, "steam.notLaunched")
+          : t(locale, "component.prepareOnLaunch")
       : state?.installStatus.installed
         ? updateAvailable
-          ? "有更新"
-          : "已安装"
-        : "未安装"
-    : "不支持当前系统";
+          ? t(locale, "common.updateAvailable")
+          : t(locale, "common.installed")
+        : t(locale, "common.notInstalled")
+    : t(locale, "common.unsupported");
   const componentDetail = launchRequired
-    ? "macOS 需要通过 wuhu 启动 Steam 才会加载组件"
+    ? t(locale, "steam.macLaunchHint")
     : updateAvailable
-      ? "请退出 Steam 后点「更新」"
+      ? t(locale, "component.updateHint")
       : undefined;
 
   return (
     <section className="page settings-page">
-      <PageHeader title="设置" />
+      <PageHeader
+        title={t(locale, "nav.settings")}
+        actions={
+          <ActionIcon
+            color="gray"
+            variant="subtle"
+            aria-label={t(locale, locale === "zh-CN" ? "language.switchToEnglish" : "language.switchToChinese")}
+            title={t(locale, locale === "zh-CN" ? "language.switchToEnglish" : "language.switchToChinese")}
+            onClick={() => setLocale(locale === "zh-CN" ? "en" : "zh-CN")}
+          >
+            <Languages size={22} strokeWidth={1.8} aria-hidden="true" />
+          </ActionIcon>
+        }
+      />
 
       {notice?.page === "settings" && <NoticeAlert notice={notice} />}
 
-      <SettingSection icon={FolderCog} title="Steam 路径">
+      <SettingSection icon={FolderCog} title={t(locale, "steam.path")}>
         <Group align="stretch" gap="sm" wrap="nowrap" className="responsive-control-row">
           <TextInput
+            aria-label={t(locale, "steam.path")}
             value={steamPathInput}
             onChange={(event) => onSteamPathChange(event.currentTarget.value)}
-            placeholder="Steam 根目录或 Steam.app"
+            placeholder={t(locale, "steam.pathPlaceholder")}
             className="grow-control"
           />
           <Button
@@ -123,10 +141,10 @@ export function SettingsPage({
             leftSection={<RefreshCcw size={17} />}
             onClick={onDetectSteamPath}
           >
-            自动读取
+            {t(locale, "steam.detect")}
           </Button>
           <Button variant="light" leftSection={<FolderOpen size={17} />} onClick={onChooseSteamPath}>
-            选择目录
+            {t(locale, "steam.browse")}
           </Button>
           <Button
             color="steam"
@@ -134,14 +152,14 @@ export function SettingsPage({
             c="#06121e"
             onClick={onSaveSteamPath}
           >
-            保存
+            {t(locale, "common.save")}
           </Button>
         </Group>
       </SettingSection>
 
-      <SettingSection icon={Wrench} title={launchRequired ? "Steam 启动" : "组件安装"}>
+      <SettingSection icon={Wrench} title={launchRequired ? t(locale, "steam.launchSection") : t(locale, "component.installSection")}>
         <InfoTile
-          label="当前状态"
+          label={t(locale, "common.currentStatus")}
           value={componentStatus}
           detail={componentDetail}
         />
@@ -157,7 +175,7 @@ export function SettingsPage({
               !componentInstallSupported || !hasSteamPath || (launchRequired && launchedViaWuhu)
             }
           >
-            {launchRequired ? "启动 Steam" : updateAvailable ? "更新" : "安装"}
+            {launchRequired ? t(locale, "steam.launch") : updateAvailable ? t(locale, "common.update") : t(locale, "common.install")}
           </Button>
           <Button
             color="red"
@@ -169,7 +187,7 @@ export function SettingsPage({
               (launchRequired && launchedViaWuhu)
             }
           >
-            恢复
+            {t(locale, "common.restore")}
           </Button>
         </Group>
       </SettingSection>
@@ -185,6 +203,8 @@ export function SettingsPage({
       >
         <Group align="stretch" gap="sm" wrap="nowrap" className="responsive-control-row">
           <PasswordInput
+            aria-label="Hubcap Key"
+            visibilityToggleButtonProps={{ "aria-label": t(locale, "settings.toggleKeyVisibility") }}
             value={hubcapKeyInput}
             onChange={(event) => onHubcapKeyChange(event.currentTarget.value)}
             placeholder="Key"
@@ -196,8 +216,8 @@ export function SettingsPage({
             variant="light"
             onClick={onRefreshHubcapQuota}
             disabled={!hasSavedHubcapKey}
-            aria-label="刷新额度"
-            title="刷新额度"
+            aria-label={t(locale, "settings.refreshQuota")}
+            title={t(locale, "settings.refreshQuota")}
           >
             <RefreshCcw size={17} />
           </ActionIcon>
@@ -207,7 +227,7 @@ export function SettingsPage({
             c="#06121e"
             onClick={onSaveHubcapKey}
           >
-            保存
+            {t(locale, "common.save")}
           </Button>
         </Group>
       </SettingSection>
@@ -215,6 +235,8 @@ export function SettingsPage({
       <SettingSection icon={KeyRound} title="DepotBox Key">
         <Group align="stretch" gap="sm" wrap="nowrap" className="responsive-control-row">
           <PasswordInput
+            aria-label="DepotBox Key"
+            visibilityToggleButtonProps={{ "aria-label": t(locale, "settings.toggleKeyVisibility") }}
             value={depotboxKeyInput}
             onChange={(event) => onDepotboxKeyChange(event.currentTarget.value)}
             placeholder="Key"
@@ -227,28 +249,28 @@ export function SettingsPage({
             c="#06121e"
             onClick={onSaveDepotboxKey}
           >
-            保存
+            {t(locale, "common.save")}
           </Button>
         </Group>
       </SettingSection>
 
-      <SettingSection icon={LockKeyhole} title="Steam 客户端版本">
+      <SettingSection icon={LockKeyhole} title={t(locale, "steam.clientVersion")}>
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           <InfoTile
-            label="Steam 版本"
-            value={formatSteamVersion(state?.steamClient.version)}
-            detail={`客户端生成日期：${formatSteamBuildDate(state?.steamClient.clientBuildDate)}`}
+            label={t(locale, "steam.version")}
+            value={formatSteamVersion(state?.steamClient.version, locale)}
+            detail={t(locale, "steam.buildDate", { date: formatSteamBuildDate(state?.steamClient.clientBuildDate, locale) })}
           />
           <InfoTile
-            label="锁定版本"
-            value={state?.steamClient.locked ? "已锁定" : "未锁定"}
+            label={t(locale, "steam.lockVersion")}
+            value={state?.steamClient.locked ? t(locale, "common.locked") : t(locale, "common.unlocked")}
             action={
               <Switch
                 checked={Boolean(state?.steamClient.locked)}
                 disabled={!steamClientLockSupported || !hasSteamPath}
                 thumbIcon={null}
-                title={state?.steamClient.locked ? "取消锁定" : "锁定"}
-                aria-label={state?.steamClient.locked ? "取消锁定 Steam 客户端版本" : "锁定 Steam 客户端版本"}
+                title={state?.steamClient.locked ? t(locale, "common.unlock") : t(locale, "common.lock")}
+                aria-label={state?.steamClient.locked ? t(locale, "steam.unlockAction") : t(locale, "steam.lockAction")}
                 onChange={(event) => onToggleSteamClientLock(event.currentTarget.checked)}
               />
             }
@@ -256,18 +278,18 @@ export function SettingsPage({
         </SimpleGrid>
       </SettingSection>
 
-      <SettingSection icon={Info} title="当前版本">
+      <SettingSection icon={Info} title={t(locale, "settings.appVersion")}>
         <InfoTile
           label="wuhu"
           value={`v${appVersion}`}
-          detail={latestRelease ? `最新版本：v${latestRelease.version}` : undefined}
+          detail={latestRelease ? t(locale, "release.latest", { version: latestRelease.version }) : undefined}
           action={
             <Group gap="sm" wrap="nowrap">
               {latestRelease && (
                 <span
                   className="release-update-dot"
-                  aria-label={`最新版本：v${latestRelease.version}`}
-                  title={`最新版本：v${latestRelease.version}`}
+                  aria-label={t(locale, "release.latest", { version: latestRelease.version })}
+                  title={t(locale, "release.latest", { version: latestRelease.version })}
                 />
               )}
               <ActionIcon
@@ -276,8 +298,8 @@ export function SettingsPage({
                 onClick={onCheckLatestRelease}
                 disabled={releaseCheckBusy}
                 aria-busy={releaseCheckBusy}
-                aria-label="检查最新版本"
-                title="检查最新版本"
+                aria-label={t(locale, "release.check")}
+                title={t(locale, "release.check")}
               >
                 {releaseCheckBusy ? <Loader color="steam" size={17} /> : <RefreshCcw size={17} />}
               </ActionIcon>

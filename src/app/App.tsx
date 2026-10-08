@@ -1,3 +1,6 @@
+import { errorText, LocalizedError } from "../i18n/errors";
+import { useLanguage } from "./LanguageProvider";
+import { message, t, type LocalizedText } from "../i18n";
 import { downloadDir, homeDir, join } from "@tauri-apps/api/path";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
@@ -46,14 +49,10 @@ import type {
 import { AppLayout } from "./AppLayout";
 import { APP_VERSION, isVersionNewer, waitForTauriRuntime } from "./runtime";
 
-function packageSavedMessage(state: AppState | null | undefined | void, subject: string) {
-  if (state?.packageSyncSupported && state.settings.steamPath) return `${subject}。`;
-  if (state?.settings.steamPath) return `${subject}，已保存到本地；当前系统暂不支持启用清单。`;
-  return `${subject}，已保存到本地；设置 Steam 路径后可启用。`;
-}
-
-function steamPathSavedMessage(_state: AppState | null | undefined | void) {
-  return "Steam 路径已保存。";
+function packageSavedMessage(state: AppState | null | undefined | void, subject: LocalizedText) {
+  if (state?.packageSyncSupported && state.settings.steamPath) return message("packages.savedNotice", { subject });
+  if (state?.settings.steamPath) return message("packages.savedUnsupported", { subject });
+  return message("packages.savedNeedsPath", { subject });
 }
 
 async function expandDialogDefaultPath(path: string | null | undefined) {
@@ -80,6 +79,7 @@ function selectedDialogPath(selected: string | string[] | null) {
 }
 
 export default function App() {
+  const { locale } = useLanguage();
   const [page, setPage] = useState<Page>("packages");
   const [state, setState] = useState<AppState | null>(null);
   const [steamPathInput, setSteamPathInput] = useState("");
@@ -137,7 +137,7 @@ export default function App() {
       if (showResult) {
         setNotice({
           page: "settings",
-          text: hasUpdate ? `发现最新版本：v${release.version}。` : "已是最新版本。",
+          text: hasUpdate ? message("release.found", { version: release.version }) : message("release.upToDate"),
           kind: hasUpdate ? "warning" : "success",
         });
       }
@@ -145,7 +145,7 @@ export default function App() {
       console.info("[wuhu] latest release check skipped", error);
       setLatestRelease(null);
       if (showResult) {
-        setNotice({ page: "settings", text: "暂时没有检查到新版本。", kind: "info" });
+        setNotice({ page: "settings", text: message("release.checkUnavailable"), kind: "info" });
       }
     } finally {
       setReleaseCheckBusy(false);
@@ -171,7 +171,7 @@ export default function App() {
       } catch (error) {
         if (cancelled) return;
         console.error("[wuhu] get_initial_state failed", error);
-        setNotice({ page: "packages", text: String(error), kind: "error" });
+        setNotice({ page: "packages", text: errorText(error), kind: "error" });
       }
     }
 
@@ -246,7 +246,7 @@ export default function App() {
       clearSearchState();
       setPackageUpdateChecks({});
     } catch (error) {
-      setNotice({ page: "packages", text: String(error), kind: "error" });
+      setNotice({ page: "packages", text: errorText(error), kind: "error" });
     } finally {
       endAction(label, true);
     }
@@ -256,8 +256,8 @@ export default function App() {
     label: string,
     noticePage: Page,
     action: () => Promise<AppState | void>,
-    success?: string | ((state: AppState | void) => string),
-    pending?: string,
+    success?: LocalizedText | ((state: AppState | void) => LocalizedText),
+    pending?: LocalizedText,
     visual = false,
   ) {
     if (!beginAction(label, visual)) return;
@@ -277,7 +277,7 @@ export default function App() {
         setNotice({ page: noticePage, text: successText, kind: "success" });
       }
     } catch (error) {
-      setNotice({ page: noticePage, text: String(error), kind: "error" });
+      setNotice({ page: noticePage, text: errorText(error), kind: "error" });
     } finally {
       endAction(label, visual);
     }
@@ -286,7 +286,7 @@ export default function App() {
   async function handleImportFile() {
     try {
       const selected = await open({
-        title: "导入清单",
+        title: t(locale, "packages.import"),
         defaultPath: await downloadsDefaultPath(),
         filters: [{ name: "ZIP", extensions: ["zip"] }],
         multiple: false,
@@ -298,18 +298,18 @@ export default function App() {
         "import",
         "packages",
         () => importPackageFromPath(path),
-        (nextState) => packageSavedMessage(nextState, "已导入清单"),
+        (nextState) => packageSavedMessage(nextState, message("packages.imported")),
       );
       setPackageUpdateChecks({});
     } catch (error) {
-      setNotice({ page: "packages", text: String(error), kind: "error" });
+      setNotice({ page: "packages", text: errorText(error), kind: "error" });
     }
   }
 
   async function handleImportTicketsFile() {
     try {
       const selected = await open({
-        title: "导入 tickets.txt",
+        title: t(locale, "tickets.importFile"),
         defaultPath: await downloadsDefaultPath(),
         filters: [{ name: "tickets.txt", extensions: ["txt"] }],
         multiple: false,
@@ -321,12 +321,12 @@ export default function App() {
         "import-ticket",
         "tickets",
         () => importTicketsTxtFromPath(path),
-        "已导入 tickets.txt。",
+        message("tickets.imported"),
         undefined,
         true,
       );
     } catch (error) {
-      setNotice({ page: "tickets", text: String(error), kind: "error" });
+      setNotice({ page: "tickets", text: errorText(error), kind: "error" });
     }
   }
 
@@ -334,7 +334,7 @@ export default function App() {
     event.preventDefault();
     const query = searchTerm.trim();
     if (!query) {
-      setNotice({ page: "packages", text: "请输入游戏名称。", kind: "warning" });
+      setNotice({ page: "packages", text: message("search.enterName"), kind: "warning" });
       return;
     }
 
@@ -377,7 +377,7 @@ export default function App() {
     if (resultCount === 0) {
       setNotice({
         page: "packages",
-        text: failedSourceCount === sources.length ? "搜索失败，请稍后重试。" : "没有搜索结果。",
+        text: failedSourceCount === sources.length ? message("search.failed") : message("search.noResults"),
         kind: failedSourceCount === sources.length ? "error" : "info",
       });
     }
@@ -451,10 +451,10 @@ export default function App() {
     const label = `add-manifest-${item.id}`;
     if (!beginAction(label, true)) return;
     try {
-      setNotice({ page: "packages", text: `正在添加 ${item.name}，请稍候。`, kind: "info" });
+      setNotice({ page: "packages", text: message("packages.addPending", { title: item.name }), kind: "info" });
 
       if (!canAddManifest(item)) {
-        throw new Error("当前没有可用清单。");
+        throw new LocalizedError(message("manifest.unavailable"));
       }
 
       await waitForNextPaint();
@@ -465,11 +465,11 @@ export default function App() {
 
       setNotice({
         page: "packages",
-        text: packageSavedMessage(nextState, `已添加 ${item.name}`),
+        text: packageSavedMessage(nextState, message("packages.added", { title: item.name })),
         kind: "success",
       });
     } catch (error) {
-      setNotice({ page: "packages", text: String(error), kind: "error" });
+      setNotice({ page: "packages", text: errorText(error), kind: "error" });
     } finally {
       endAction(label, true);
     }
@@ -490,11 +490,11 @@ export default function App() {
 
   async function deletePackage(pkg: PackageItem) {
     const confirmed = window.confirm(
-      `确定删除「${pkg.title}」吗？\n\n会删除本地 data 里的清单；已配置 Steam 路径时，也会移除 Steam 中启用的 Lua 和 manifest 副本。`,
+      t(locale, "packages.confirmDelete", { title: pkg.title }),
     );
     if (!confirmed) return;
 
-    await runAction(`delete-${pkg.id}`, "packages", () => deletePackageCommand(pkg.id), "已删除清单。");
+    await runAction(`delete-${pkg.id}`, "packages", () => deletePackageCommand(pkg.id), message("packages.deleted"));
     setPackageUpdateChecks((current) => {
       const next = { ...current };
       delete next[pkg.id];
@@ -507,7 +507,7 @@ export default function App() {
     if (!beginAction(label, true)) return;
 
     try {
-      setNotice({ page: "packages", text: `正在更新 ${pkg.title}，请稍候。`, kind: "info" });
+      setNotice({ page: "packages", text: message("packages.updatePending", { title: pkg.title }), kind: "info" });
       await waitForNextPaint();
 
       const nextState = await updateRemoteManifest(pkg.id);
@@ -518,9 +518,9 @@ export default function App() {
         return next;
       });
 
-      setNotice({ page: "packages", text: `已更新 ${pkg.title}。`, kind: "success" });
+      setNotice({ page: "packages", text: message("packages.updated", { title: pkg.title }), kind: "success" });
     } catch (error) {
-      setNotice({ page: "packages", text: String(error), kind: "error" });
+      setNotice({ page: "packages", text: errorText(error), kind: "error" });
     } finally {
       endAction(label, true);
     }
@@ -528,7 +528,7 @@ export default function App() {
 
   async function extractTicketByAppId(appId: number) {
     if (!Number.isInteger(appId) || appId <= 0) {
-      setNotice({ page: "tickets", text: "AppID 必须是正整数。", kind: "warning" });
+      setNotice({ page: "tickets", text: message("tickets.invalidAppId"), kind: "warning" });
       return;
     }
 
@@ -541,8 +541,8 @@ export default function App() {
       "extract-ticket",
       "tickets",
       () => extractTicketCommand(appId, title),
-      `已提取 ${title} 的 Ticket。`,
-      `正在提取 ${title} 的 Ticket，请确认 Steam 正在运行并已登录。`,
+      message("tickets.extracted", { title }),
+      message("tickets.extractPending", { title }),
       true,
     );
   }
@@ -550,7 +550,7 @@ export default function App() {
   async function exportTicket(ticket: TicketItem) {
     try {
       const path = await save({
-        title: "导出 tickets.txt",
+        title: t(locale, "tickets.exportFile"),
         defaultPath: await downloadsDefaultPath(`${ticket.appId}.tickets.txt`),
         filters: [{ name: "tickets.txt", extensions: ["txt"] }],
       });
@@ -560,24 +560,24 @@ export default function App() {
         `export-ticket-${ticket.appId}`,
         "tickets",
         () => exportTicketsTxt(ticket.appId, path),
-        "已导出 tickets.txt。",
+        message("tickets.exported"),
         undefined,
         true,
       );
     } catch (error) {
-      setNotice({ page: "tickets", text: String(error), kind: "error" });
+      setNotice({ page: "tickets", text: errorText(error), kind: "error" });
     }
   }
 
   async function deleteTicket(ticket: TicketItem) {
-    const confirmed = window.confirm(`确定删除「${ticket.title}」的 Ticket 吗？`);
+    const confirmed = window.confirm(t(locale, "tickets.confirmDelete", { title: ticket.title }));
     if (!confirmed) return;
 
     await runAction(
       `delete-ticket-${ticket.appId}`,
       "tickets",
       () => deleteTicketCommand(ticket.appId),
-      "已删除 Ticket。",
+      message("tickets.deleted"),
       undefined,
       true,
     );
@@ -592,16 +592,16 @@ export default function App() {
       const skippedCount = packages.length - checkablePackages.length;
 
       if (!checkablePackages.length) {
-        setNotice({ page: "packages", text: "没有可检查的清单：需要先识别 AppID。", kind: "warning" });
+        setNotice({ page: "packages", text: message("packages.noCheckable"), kind: "warning" });
         return;
       }
 
       if (!state || !hasConfiguredManifestSource(state.settings)) {
-        setNotice({ page: "packages", text: "请先在设置里保存 Key，才能检查清单。", kind: "warning" });
+        setNotice({ page: "packages", text: message("packages.keyRequired"), kind: "warning" });
         return;
       }
 
-      setNotice({ page: "packages", text: "正在检查清单可用性，不会下载文件。", kind: "info" });
+      setNotice({ page: "packages", text: message("packages.checking"), kind: "info" });
       await waitForNextPaint();
 
       const statuses = await fetchPreferredManifestStatuses(checkablePackages.map((pkg) => pkg.appId ?? 0), state.settings);
@@ -618,23 +618,23 @@ export default function App() {
         const status = nextChecks[pkg.id]?.status;
         return status?.available && !status.fileModified;
       }).length;
-      const skippedText = skippedCount ? `，另有 ${skippedCount} 个未识别 AppID 的清单已跳过` : "";
+      const skippedText = skippedCount ? message("packages.skipped", { count: skippedCount }) : "";
       if (updatedPackages.length) {
         const examples = updatedPackages
           .slice(0, 3)
           .map((pkg) => pkg.title)
-          .join("、");
-        const suffix = updatedPackages.length > 3 ? " 等" : "";
-        const unknownText = unknownTimeCount ? `，另有 ${unknownTimeCount} 个清单更新时间未知` : "";
+          .join(locale === "en" ? ", " : "、");
+        const suffix = updatedPackages.length > 3 ? message("common.andMore") : "";
+        const unknownText = unknownTimeCount ? message("packages.unknownTimes", { count: unknownTimeCount }) : "";
         setNotice({
           page: "packages",
-          text: `发现 ${updatedPackages.length} 个清单有更新：${examples}${suffix}${unknownText}${skippedText}。`,
+          text: message("packages.updatesFound", { count: updatedPackages.length, examples, more: suffix, unknown: unknownText, skipped: skippedText }),
           kind: "warning",
         });
       } else {
         const checkedText = unknownTimeCount
-          ? `检查完成，已更新可用性状态；${unknownTimeCount} 个清单更新时间未知${skippedText}。`
-          : `检查完成，没有发现可用更新${skippedText}。`;
+          ? message("packages.checkedUnknown", { count: unknownTimeCount, skipped: skippedText })
+          : message("packages.checked", { skipped: skippedText });
         setNotice({
           page: "packages",
           text: checkedText,
@@ -642,7 +642,7 @@ export default function App() {
         });
       }
     } catch (error) {
-      setNotice({ page: "packages", text: String(error), kind: "error" });
+      setNotice({ page: "packages", text: errorText(error), kind: "error" });
     } finally {
       endAction(label, true);
     }
@@ -653,7 +653,7 @@ export default function App() {
       "steam-path",
       "settings",
       () => setSteamPathCommand(steamPathInput.trim()),
-      steamPathSavedMessage,
+      message("steam.pathSaved"),
     );
   }
 
@@ -672,10 +672,10 @@ export default function App() {
         setHubcapQuota(null);
       }
 
-      setNotice({ page: "settings", text: "Key 已保存。", kind: "success" });
+      setNotice({ page: "settings", text: message("settings.keySaved"), kind: "success" });
     } catch (error) {
       setHubcapQuota(null);
-      setNotice({ page: "settings", text: String(error), kind: "error" });
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
     } finally {
       endAction(label);
     }
@@ -691,9 +691,9 @@ export default function App() {
       await applyAppState(nextState);
       setPackageUpdateChecks({});
 
-      setNotice({ page: "settings", text: "Key 已保存。", kind: "success" });
+      setNotice({ page: "settings", text: message("settings.keySaved"), kind: "success" });
     } catch (error) {
-      setNotice({ page: "settings", text: String(error), kind: "error" });
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
     } finally {
       endAction(label);
     }
@@ -707,7 +707,7 @@ export default function App() {
       setHubcapQuota(await getHubcapQuota());
     } catch (error) {
       setHubcapQuota(null);
-      setNotice({ page: "settings", text: String(error), kind: "error" });
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
     } finally {
       endAction(label);
     }
@@ -719,19 +719,19 @@ export default function App() {
 
     try {
       const path = await detectSteamPathCommand();
-      if (!path) throw new Error("没有自动检测到 Steam 路径，可以手动填写 Steam 根目录或 Steam.app。");
+      if (!path) throw new LocalizedError(message("steam.notDetected"));
 
       setSteamPathInput(path);
       if (path === state?.settings.steamPath) {
-        setNotice({ page: "settings", text: "Steam 路径已是最新。", kind: "success" });
+        setNotice({ page: "settings", text: message("steam.pathUnchanged"), kind: "success" });
         return;
       }
 
       const nextState = await setSteamPathCommand(path);
       await applyAppState(nextState);
-      setNotice({ page: "settings", text: steamPathSavedMessage(nextState), kind: "success" });
+      setNotice({ page: "settings", text: message("steam.pathSaved"), kind: "success" });
     } catch (error) {
-      setNotice({ page: "settings", text: String(error), kind: "error" });
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
     } finally {
       endAction(label);
     }
@@ -743,7 +743,7 @@ export default function App() {
         state?.settings.steamPath ?? (await detectSteamPathCommand()),
       );
       const selected = await open({
-        title: "选择 Steam 根目录或 Steam.app",
+        title: t(locale, "steam.choosePath"),
         directory: true,
         multiple: false,
         defaultPath,
@@ -756,10 +756,10 @@ export default function App() {
         "steam-path",
         "settings",
         () => setSteamPathCommand(selectedPath),
-        steamPathSavedMessage,
+        message("steam.pathSaved"),
       );
     } catch (error) {
-      setNotice({ page: "settings", text: String(error), kind: "error" });
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
     }
   }
 
@@ -768,7 +768,7 @@ export default function App() {
       "steam-client-lock",
       "settings",
       () => setSteamClientVersionLocked(locked),
-      locked ? "已锁定 Steam 客户端版本。" : "已取消锁定 Steam 客户端版本。",
+      locked ? message("steam.lockedNotice") : message("steam.unlockedNotice"),
     );
   }
 
@@ -848,8 +848,8 @@ export default function App() {
               "settings",
               () => installOpenSteamTool(),
               state?.installStatus.updateAvailable
-                ? "组件已更新。建议重启 Steam 后生效。"
-                : "安装完成。建议重启 Steam 后生效。",
+                ? message("component.updated")
+                : message("component.installedNotice"),
             )
           }
           onLaunchSteamWithOpenSteamTool={() =>
@@ -857,7 +857,7 @@ export default function App() {
               "launch-steam",
               "settings",
               () => launchSteamWithOpenSteamTool(),
-              "已通过 wuhu 启动 Steam。",
+              message("steam.launchedNotice"),
             )
           }
           onRestoreOpenSteamTool={() =>
@@ -865,7 +865,7 @@ export default function App() {
               "restore",
               "settings",
               () => restoreOpenSteamTool(),
-              state?.installStatus.launchRequired ? "已恢复 Steam 原文件。" : "已移除组件。",
+              state?.installStatus.launchRequired ? message("steam.restored") : message("component.removed"),
             )
           }
           onToggleSteamClientLock={toggleSteamClientLock}

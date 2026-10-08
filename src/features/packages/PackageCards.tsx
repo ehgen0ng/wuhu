@@ -1,3 +1,6 @@
+import { useLanguage } from "../../app/LanguageProvider";
+import { t, renderText } from "../../i18n";
+import { renderError } from "../../i18n/errors";
 import { ActionIcon, Button, Card, Group, Stack, Switch, Text, Title } from "@mantine/core";
 import { Download, PackagePlus, Trash2 } from "lucide-react";
 import { GameArt } from "../../components/GameArt";
@@ -16,10 +19,11 @@ type SearchResultCardProps = {
 };
 
 export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: SearchResultCardProps) {
+  const { locale } = useLanguage();
   const canAdd = canAddManifest(item);
   const isAdding = busy === `add-manifest-${item.id}`;
-  const manifestText = manifestStatusText(item);
-  const manifestIssue = manifestIssueText(item);
+  const manifestText = manifestStatusText(item, locale);
+  const manifestIssue = manifestIssueText(item, locale);
 
   return (
     <Card className="package-card" p={0}>
@@ -39,7 +43,7 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
             {item.name}
           </Title>
           <Text className="package-meta" c="dimmed" size="sm">
-            {searchResultSubtitle(item)}
+            {searchResultSubtitle(item, locale)}
           </Text>
           {manifestText && (
             <Text className="package-meta" c="steam.3" size="xs" lh={1.35}>
@@ -53,7 +57,7 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
           )}
           {existingPackage?.manifestUpdatedAt && (
             <Text className="package-meta" c="dimmed" size="xs" lh={1.35}>
-              已添加：{formatManifestTime(existingPackage.manifestUpdatedAt)}
+              {t(locale, "packages.addedLabel")}{formatManifestTime(existingPackage.manifestUpdatedAt, locale)}
             </Text>
           )}
         </Stack>
@@ -69,7 +73,7 @@ export function SearchResultCard({ item, index, existingPackage, busy, onAdd }: 
             disabled={isAdding}
             aria-busy={isAdding}
           >
-            {isAdding ? "添加中" : existingPackage ? "重新添加" : "添加"}
+            {isAdding ? t(locale, "packages.adding") : existingPackage ? t(locale, "packages.reAdd") : t(locale, "common.add")}
           </Button>
         )}
       </Group>
@@ -107,15 +111,16 @@ export function SavedPackageCard({
   onToggle,
   onDelete,
 }: SavedPackageCardProps) {
+  const { locale } = useLanguage();
   const isUpdating = busy === `update-manifest-${pkg.id}`;
   const canSyncPackage = hasSteamPath && packageSyncSupported;
   const toggleTitle = packageSyncSupported
     ? hasSteamPath
       ? pkg.enabled
-        ? "禁用"
-        : "启用"
-      : "设置 Steam 路径后可启用"
-    : "清单启用目前只支持 Windows 和 macOS";
+        ? t(locale, "common.disable")
+        : t(locale, "common.enable")
+      : t(locale, "packages.pathRequired")
+    : t(locale, "packages.syncUnsupported");
 
   return (
     <Card className="package-card" p={0}>
@@ -135,21 +140,23 @@ export function SavedPackageCard({
             {pkg.title}
           </Title>
           <Text className="package-meta" c="dimmed" size="sm">
-            {packageSubtitle(pkg)}
+            {packageSubtitle(pkg, locale)}
           </Text>
           {pkg.manifestUpdatedAt && (
             <Text className="package-meta" c="dimmed" size="xs" lh={1.35}>
-              清单更新：{formatManifestTime(pkg.manifestUpdatedAt)}
+              {t(locale, "manifest.updatedLabel")}{formatManifestTime(pkg.manifestUpdatedAt, locale)}
             </Text>
           )}
           {!pkg.manifestUpdatedAt && pkg.manifestFiles.length > 0 && (
             <Text className="package-meta" c="dimmed" size="xs" lh={1.35}>
-              清单更新：未知
+              {t(locale, "manifest.updatedUnknown")}
             </Text>
           )}
           {updateCheck && (
             <Text c={updateCheckColor(updateCheck.kind)} size="xs" lh={1.35}>
-              {updateCheck.message}
+              {updateCheck.kind === "error"
+                ? renderError(locale, updateCheck.message)
+                : renderText(locale, updateCheck.message)}
             </Text>
           )}
         </Stack>
@@ -167,8 +174,8 @@ export function SavedPackageCard({
             <ActionIcon
               color="red"
               variant="subtle"
-              aria-label={`删除 ${pkg.title}`}
-              title="删除"
+              aria-label={t(locale, "packages.deleteAction", { title: pkg.title })}
+              title={t(locale, "common.delete")}
               onClick={() => onDelete(pkg)}
               disabled={busy === `delete-${pkg.id}`}
             >
@@ -185,7 +192,7 @@ export function SavedPackageCard({
               disabled={isUpdating}
               aria-busy={isUpdating}
             >
-              更新
+              {t(locale, "common.update")}
             </Button>
           )}
         </Stack>

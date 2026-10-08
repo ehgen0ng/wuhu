@@ -1,3 +1,5 @@
+import type { LocalizedText } from "./i18n";
+
 export type PackageItem = {
   id: string;
   title: string;
@@ -58,14 +60,14 @@ export type NoticeKind = "info" | "success" | "warning" | "error";
 
 export type Notice = {
   page: Page;
-  text: string;
+  text: LocalizedText;
   kind?: NoticeKind;
 };
 
 export type PackageUpdateCheck = {
   status: ManifestStatus | null;
   hasUpdate: boolean;
-  message: string;
+  message: LocalizedText;
   kind: NoticeKind;
   checkedAt: number;
 };
