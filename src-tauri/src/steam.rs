@@ -587,9 +587,17 @@ pub(crate) fn install_status(store: &AppStore) -> InstallStatus {
             .map(|(steam_root, core_path)| {
                 let installed = windows_components_present(&steam_root, &core_path);
                 let update_available = installed
-                    && windows_component_targets(&steam_root, &core_path)
+                    && (windows_component_targets(&steam_root, &core_path)
                         .into_iter()
-                        .any(|(path, name)| !tool_file_matches_embedded(&path, name));
+                        .any(|(path, name)| !tool_file_matches_embedded(&path, name))
+                        || !cloud_redirect_config_path()
+                            .zip(crate::store::portable_data_dir().ok())
+                            .is_some_and(|(config_path, data_dir)| {
+                                cloud_redirect_local_folder_matches(
+                                    &config_path,
+                                    &data_dir.join("cloudredirect"),
+                                )
+                            }));
                 (installed, update_available)
             })
             .unwrap_or((false, false));
@@ -1272,6 +1280,21 @@ fn set_cloud_enabled(content: &str) -> String {
     updated
 }
 
+// 检查插件配置是否仍指向当前 wuhu 的存档目录；配置缺失或无效时需要更新。
+#[cfg(any(windows, test))]
+fn cloud_redirect_local_folder_matches(config_path: &Path, sync_path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    config
+        .get("sync_path")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|configured_path| Path::new(configured_path) == sync_path)
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn configure_cloud_redirect_local_folder() -> Result<(), String> {
     let config_path = cloud_redirect_config_path()
@@ -1332,8 +1355,8 @@ fn embedded_tool_file(file_name: &str) -> Option<&'static [u8]> {
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod tests {
     use super::{
-        has_config_value, remove_client_lock_lines, set_cloud_enabled,
-        set_cloud_redirect_local_config,
+        cloud_redirect_local_folder_matches, has_config_value, remove_client_lock_lines,
+        set_cloud_enabled, set_cloud_redirect_local_config,
     };
 
     #[test]
@@ -1390,6 +1413,62 @@ mod tests {
         assert_eq!(config["auto_update_dll"], true);
         assert_eq!(config["token_paths"]["gdrive"], "tokens.json");
         assert_eq!(config["sync_achievements"], true);
+    }
+
+    #[test]
+    fn cloud_redirect_local_folder_detects_relocation_until_config_is_updated() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let test_root = std::env::temp_dir().join(format!(
+            "wuhu-cloud-redirect-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&test_root).expect("test directory should be created");
+        let config_path = test_root.join("config.json");
+        let old_path = test_root.join("old/data/cloudredirect");
+        let new_path = test_root.join("new/data/cloudredirect");
+        let mut config = serde_json::json!({ "sync_path": old_path });
+        std::fs::write(&config_path, config.to_string()).expect("config should be written");
+
+        assert!(cloud_redirect_local_folder_matches(&config_path, &old_path));
+        assert!(!cloud_redirect_local_folder_matches(
+            &config_path,
+            &new_path
+        ));
+
+        set_cloud_redirect_local_config(
+            &mut config,
+            new_path.to_str().expect("test path should be Unicode"),
+            true,
+        )
+        .expect("config should be updated");
+        std::fs::write(&config_path, config.to_string()).expect("config should be written");
+        assert!(cloud_redirect_local_folder_matches(&config_path, &new_path));
+
+        std::fs::remove_file(&config_path).expect("config should be removed");
+        assert!(!cloud_redirect_local_folder_matches(
+            &config_path,
+            &new_path
+        ));
+        for content in [
+            "not json",
+            "null",
+            "{}",
+            r#"{"sync_path":null}"#,
+            r#"{"sync_path":42}"#,
+        ] {
+            std::fs::write(&config_path, content).expect("invalid config should be written");
+            assert!(!cloud_redirect_local_folder_matches(
+                &config_path,
+                &new_path
+            ));
+        }
+
+        std::fs::remove_dir_all(test_root).expect("test directory should be removed");
     }
 
     #[test]
