@@ -109,3 +109,5 @@ fn now_seconds() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+pub(crate) use archive::normalize_archive;

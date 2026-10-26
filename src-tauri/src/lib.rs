@@ -2,6 +2,7 @@ use base64::{engine::general_purpose, Engine as _};
 use std::{ffi::OsStr, fs, path::Path};
 use tauri::AppHandle;
 
+mod luatools_auth;
 mod manifests;
 mod models;
 mod net;
@@ -153,6 +154,24 @@ async fn check_depotbox_manifest_statuses(
 async fn get_hubcap_quota() -> Result<HubcapQuota, String> {
     let store = load_store()?;
     manifests::get_hubcap_quota(&store).await
+}
+
+#[tauri::command]
+async fn set_luatools_credentials(credential: String) -> Result<AppState, String> {
+    luatools_auth::save_credentials(&credential).await?;
+    build_state(load_store()?)
+}
+
+#[tauri::command]
+async fn get_luatools_quota() -> Result<manifests::luatools::LuaToolsQuota, String> {
+    manifests::luatools::fetch_quota().await
+}
+
+#[tauri::command]
+async fn check_preferred_manifest_statuses(
+    app_ids: Vec<u32>,
+) -> Result<Vec<ManifestStatus>, String> {
+    manifests::check_preferred_manifest_statuses(&load_store()?, app_ids).await
 }
 
 #[tauri::command]
@@ -326,6 +345,10 @@ async fn search_isthereanydeal_games(query: String) -> Result<Vec<SteamSearchIte
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            luatools_auth::init(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_initial_state,
             detect_steam_path,
@@ -333,6 +356,9 @@ pub fn run() {
             import_package_from_bytes,
             import_package_from_path,
             set_hubcap_api_key,
+            set_luatools_credentials,
+            get_luatools_quota,
+            check_preferred_manifest_statuses,
             set_depotbox_api_key,
             check_hubcap_manifest_statuses,
             check_depotbox_manifest_statuses,

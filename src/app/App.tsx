@@ -2,6 +2,7 @@ import { errorText, LocalizedError } from "../i18n/errors";
 import { useLanguage } from "./LanguageProvider";
 import { message, t, type LocalizedText } from "../i18n";
 import { downloadDir, homeDir, join } from "@tauri-apps/api/path";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -13,6 +14,8 @@ import {
   extractTicket as extractTicketCommand,
   getOpenSteamToolStatus,
   getHubcapQuota,
+  getLuaToolsQuota,
+  setLuaToolsCredentials,
   getInitialState,
   getLatestAppRelease,
   importPackageFromPath,
@@ -38,6 +41,8 @@ import { wait, waitForNextPaint } from "../lib/render";
 import type {
   AppState,
   HubcapQuota,
+  LuaToolsAuthState,
+  LuaToolsQuota,
   AppRelease,
   Notice,
   PackageUpdateCheck,
@@ -86,6 +91,9 @@ export default function App() {
   const [hubcapKeyInput, setHubcapKeyInput] = useState("");
   const [depotboxKeyInput, setDepotboxKeyInput] = useState("");
   const [hubcapQuota, setHubcapQuota] = useState<HubcapQuota | null>(null);
+  const [luaToolsInput, setLuaToolsInput] = useState("");
+  const [luaToolsQuota, setLuaToolsQuota] = useState<LuaToolsQuota | null>(null);
+  const luaToolsInputDirty = useRef(false);
   const [latestRelease, setLatestRelease] = useState<AppRelease | null>(null);
   const [releaseCheckBusy, setReleaseCheckBusy] = useState(false);
   const [packageUpdateChecks, setPackageUpdateChecks] = useState<Record<string, PackageUpdateCheck>>({});
@@ -102,10 +110,13 @@ export default function App() {
   const packages = state?.packages ?? [];
   const tickets = state?.tickets ?? [];
   const hasLoadedState = state !== null;
-  const manifestSettings = state?.settings ?? {
-    steamPath: steamPathInput || null,
-    hubcapApiKey: hubcapKeyInput || null,
-    depotboxApiKey: depotboxKeyInput || null,
+  const manifestSettings = {
+    ...(state?.settings ?? {
+      steamPath: steamPathInput || null,
+      hubcapApiKey: hubcapKeyInput || null,
+      depotboxApiKey: depotboxKeyInput || null,
+    }),
+    luatoolsConfigured: Boolean(state?.luatoolsAuth),
   };
   const appUpdateRelease =
     latestRelease && isVersionNewer(latestRelease.version, APP_VERSION) ? latestRelease : null;
@@ -114,13 +125,14 @@ export default function App() {
     const applyVersion = stateApplyVersion.current + 1;
     stateApplyVersion.current = applyVersion;
     setState(nextState);
+    if (!luaToolsInputDirty.current) setLuaToolsInput(nextState.luatoolsAuth?.credential ?? "");
     setSteamPathInput(nextState.settings.steamPath ?? "");
     setHubcapKeyInput(nextState.settings.hubcapApiKey ?? "");
     setDepotboxKeyInput(nextState.settings.depotboxApiKey ?? "");
 
     const enrichedState = await enrichPackageMetadata(nextState);
     if (stateApplyVersion.current !== applyVersion) return;
-    setState(enrichedState);
+    setState((current) => ({ ...enrichedState, luatoolsAuth: current ? current.luatoolsAuth : enrichedState.luatoolsAuth }));
     setSteamPathInput(enrichedState.settings.steamPath ?? "");
     setHubcapKeyInput(enrichedState.settings.hubcapApiKey ?? "");
     setDepotboxKeyInput(enrichedState.settings.depotboxApiKey ?? "");
@@ -180,6 +192,30 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void waitForTauriRuntime().then(async (ready) => {
+      if (!ready || cancelled) return;
+      const stop = await listen<LuaToolsAuthState | null>("luatools-auth-changed", ({ payload }) => {
+        setState((current) => current ? { ...current, luatoolsAuth: payload } : current);
+        if (!luaToolsInputDirty.current) setLuaToolsInput(payload?.credential ?? "");
+      });
+      if (cancelled) stop();
+      else unlisten = stop;
+    }).catch(() => {});
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (page !== "settings" || !state?.luatoolsAuth || busyRef.current === "luatools-credentials") return;
+    let cancelled = false;
+    void getLuaToolsQuota().then((quota) => {
+      if (!cancelled) setLuaToolsQuota(quota);
+    }).catch(() => { if (!cancelled) setLuaToolsQuota(null); });
+    return () => { cancelled = true; };
+  }, [page, state?.luatoolsAuth?.credential]);
 
   useEffect(() => {
     void checkLatestRelease();
@@ -288,7 +324,7 @@ export default function App() {
       const selected = await open({
         title: t(locale, "packages.import"),
         defaultPath: await downloadsDefaultPath(),
-        filters: [{ name: "ZIP", extensions: ["zip"] }],
+        filters: [{ name: "ZIP", extensions: ["zip", "lua"] }],
         multiple: false,
       });
       const path = selectedDialogPath(selected);
@@ -681,6 +717,35 @@ export default function App() {
     }
   }
 
+  async function saveLuaToolsCredentials() {
+    const label = "luatools-credentials";
+    if (!beginAction(label)) return;
+    try {
+      setNotice(null);
+      setLuaToolsQuota(null);
+      const nextState = await setLuaToolsCredentials(luaToolsInput.trim());
+      luaToolsInputDirty.current = false;
+      await applyAppState(nextState);
+      if (nextState.luatoolsAuth) setLuaToolsQuota(await getLuaToolsQuota());
+      setPackageUpdateChecks({});
+      setNotice({ page: "settings", text: message("settings.luaToolsSaved"), kind: "success" });
+    } catch (error) {
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
+    } finally { endAction(label); }
+  }
+
+  async function refreshLuaToolsQuota() {
+    const label = "luatools-quota";
+    if (!beginAction(label)) return;
+    try {
+      setNotice(null);
+      setLuaToolsQuota(await getLuaToolsQuota());
+    } catch (error) {
+      setLuaToolsQuota(null);
+      setNotice({ page: "settings", text: errorText(error), kind: "error" });
+    } finally { endAction(label); }
+  }
+
   async function saveDepotboxKey() {
     const label = "depotbox-key";
     if (!beginAction(label)) return;
@@ -829,6 +894,15 @@ export default function App() {
           hubcapKeyInput={hubcapKeyInput}
           depotboxKeyInput={depotboxKeyInput}
           hubcapQuota={hubcapQuota}
+          luaToolsInput={luaToolsInput}
+          luaToolsQuota={luaToolsQuota}
+          onLuaToolsInputChange={(value) => {
+            luaToolsInputDirty.current = true;
+            setLuaToolsInput(value);
+            setLuaToolsQuota(null);
+          }}
+          onSaveLuaToolsCredentials={saveLuaToolsCredentials}
+          onRefreshLuaToolsQuota={refreshLuaToolsQuota}
           onSteamPathChange={setSteamPathInput}
           onHubcapKeyChange={(value) => {
             setHubcapKeyInput(value);

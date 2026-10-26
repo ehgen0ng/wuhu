@@ -36,6 +36,7 @@ export type SteamClientStatus = {
 };
 
 export type AppState = {
+  luatoolsAuth: LuaToolsAuthState | null;
   settings: AppSettings;
   packages: PackageItem[];
   tickets: TicketItem[];
@@ -96,10 +97,11 @@ export type SteamSearchResult = {
   manifestChecked?: boolean;
 };
 
-export type ManifestProvider = "hubcap" | "depotbox";
+export type ManifestProvider = "hubcap" | "luatools" | "depotbox";
 
 export type ManifestStatus = {
   provider: ManifestProvider;
+  source?: string | null;
   appId: number;
   gameName: string | null;
   status: string | null;
@@ -123,4 +125,15 @@ export type AppRelease = {
   version: string;
   name: string | null;
   url: string | null;
+};
+
+export type LuaToolsAuthState = {
+  credential: string;
+  hasRefreshToken: boolean;
+  expiresAt: number;
+};
+
+export type LuaToolsQuota = {
+  dailyUsage: number;
+  dailyLimit: number | null;
 };

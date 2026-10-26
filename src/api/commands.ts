@@ -3,6 +3,7 @@ import type {
   AppRelease,
   AppState,
   HubcapQuota,
+  LuaToolsQuota,
   InstallStatus,
   ManifestStatus,
   SteamSearchResult,
@@ -126,4 +127,16 @@ export function searchCheapsharkGames(query: string) {
 
 export function searchIsthereanydealGames(query: string) {
   return call<SteamSearchResult[]>("search_isthereanydeal_games", { query });
+}
+
+export function setLuaToolsCredentials(credential: string) {
+  return call<AppState>("set_luatools_credentials", { credential });
+}
+
+export function getLuaToolsQuota() {
+  return call<LuaToolsQuota>("get_luatools_quota");
+}
+
+export function checkPreferredManifestStatuses(appIds: number[]) {
+  return call<ManifestStatus[]>("check_preferred_manifest_statuses", { appIds });
 }

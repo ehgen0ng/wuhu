@@ -102,6 +102,7 @@ pub(crate) async fn fetch_statuses(
         .map(|app_id| {
             by_app_id.remove(&app_id).unwrap_or_else(|| ManifestStatus {
                 provider: "depotbox".to_string(),
+                source: None,
                 app_id,
                 game_name: None,
                 status: Some("missing".to_string()),
@@ -177,6 +178,7 @@ fn status_from_value(app_id: u32, value: &serde_json::Value) -> ManifestStatus {
 
     ManifestStatus {
         provider: "depotbox".to_string(),
+        source: None,
         app_id,
         game_name: value_as_string(value, "name").or_else(|| value_as_string(value, "game_name")),
         status: Some(

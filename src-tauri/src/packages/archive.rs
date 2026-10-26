@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     fs,
-    io::{Cursor, Read, Seek},
+    io::{Cursor, Read, Seek, Write},
     path::Path,
 };
 
@@ -28,6 +28,7 @@ pub(crate) fn import_archive(
     replace_package_id: Option<String>,
     enabled: bool,
 ) -> Result<AppState, String> {
+    let bytes = normalize_archive(&file_name, bytes)?;
     let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice()))
         .map_err(|err| format!("zip 读取失败：{err}"))?;
 
@@ -149,4 +150,81 @@ fn file_name_only(path: &str) -> Result<String, String> {
         .map(|name| name.to_string())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| format!("zip 内文件名不安全：{path}"))
+}
+
+// Some LuaTools sources return a Lua script directly. Keep one import path for both formats.
+pub(crate) fn normalize_archive(file_name: &str, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    if bytes.starts_with(b"PK") {
+        let mut archive =
+            ZipArchive::new(Cursor::new(&bytes)).map_err(|err| format!("zip 读取失败：{err}"))?;
+        if find_entry_index(&mut archive, ".lua")?.is_none() {
+            return Err("压缩包里没有找到 .lua 文件".to_string());
+        }
+        return Ok(bytes);
+    }
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| "清单不是有效的 ZIP 或 Lua 文件".to_string())?;
+    if !text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .any(|line| line.trim_start().starts_with("addappid("))
+    {
+        return Err("清单不是有效的 ZIP 或 Lua 文件".to_string());
+    }
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("package");
+    let name = format!("{stem}.lua");
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive
+        .start_file(name, zip::write::SimpleFileOptions::default())
+        .map_err(|err| format!("保存 Lua 失败：{err}"))?;
+    archive
+        .write_all(&bytes)
+        .map_err(|err| format!("保存 Lua 失败：{err}"))?;
+    archive
+        .finish()
+        .map(|cursor| cursor.into_inner())
+        .map_err(|err| format!("保存 Lua 失败：{err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_lua_becomes_a_valid_archive_without_changing_its_contents() {
+        let lua = b"-- Generated with Luie\naddappid(1086940)\nsetManifestid(1419660, \"123\")\n"
+            .to_vec();
+        let bytes = normalize_archive("1086940.lua", lua.clone()).unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.len(), 1);
+        let mut entry = archive.by_name("1086940.lua").unwrap();
+        let mut output = Vec::new();
+        entry.read_to_end(&mut output).unwrap();
+        assert_eq!(output, lua);
+        assert_eq!(
+            normalize_archive("1086940.zip", bytes.clone()).unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn invalid_downloads_are_rejected_before_package_replacement() {
+        for bytes in [
+            b"<html>Access denied</html>".to_vec(),
+            b"{\"error\":\"no manifest\"}".to_vec(),
+            b"PK broken zip".to_vec(),
+            vec![255],
+        ] {
+            assert!(normalize_archive("1086940.lua", bytes).is_err());
+        }
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        archive
+            .start_file("file.manifest", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"manifest").unwrap();
+        assert!(normalize_archive("1086940.zip", archive.finish().unwrap().into_inner()).is_err());
+    }
 }

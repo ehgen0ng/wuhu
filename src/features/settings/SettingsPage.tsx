@@ -27,7 +27,7 @@ import { NoticeAlert } from "../../components/NoticeAlert";
 import { PageHeader } from "../../components/PageHeader";
 import { SettingSection } from "../../components/SettingSection";
 import { formatHubcapQuota, formatSteamBuildDate, formatSteamVersion } from "../../domain/display";
-import type { AppRelease, AppState, HubcapQuota, Notice } from "../../types";
+import type { AppRelease, AppState, HubcapQuota, LuaToolsQuota, Notice } from "../../types";
 import { InfoTile } from "./InfoTile";
 
 type SettingsPageProps = {
@@ -40,6 +40,11 @@ type SettingsPageProps = {
   hubcapKeyInput: string;
   depotboxKeyInput: string;
   hubcapQuota: HubcapQuota | null;
+  luaToolsInput: string;
+  luaToolsQuota: LuaToolsQuota | null;
+  onLuaToolsInputChange: (value: string) => void;
+  onSaveLuaToolsCredentials: () => void;
+  onRefreshLuaToolsQuota: () => void;
   onSteamPathChange: (value: string) => void;
   onHubcapKeyChange: (value: string) => void;
   onDepotboxKeyChange: (value: string) => void;
@@ -66,6 +71,11 @@ export function SettingsPage({
   hubcapKeyInput,
   depotboxKeyInput,
   hubcapQuota,
+  luaToolsInput,
+  luaToolsQuota,
+  onLuaToolsInputChange,
+  onSaveLuaToolsCredentials,
+  onRefreshLuaToolsQuota,
   onSteamPathChange,
   onHubcapKeyChange,
   onDepotboxKeyChange,
@@ -227,6 +237,41 @@ export function SettingsPage({
             c="#06121e"
             onClick={onSaveHubcapKey}
           >
+            {t(locale, "common.save")}
+          </Button>
+        </Group>
+      </SettingSection>
+
+      <SettingSection
+        icon={KeyRound}
+        title="LuaTools Token"
+        aside={
+          <Badge className="quota-badge" color="steam" size="lg" variant="subtle" title={t(locale, "settings.luaToolsQuotaHint")}>
+            {luaToolsQuota ? `${luaToolsQuota.dailyUsage}/${luaToolsQuota.dailyLimit ?? "∞"}` : "--/--"}
+          </Badge>
+        }
+      >
+        <Group align="stretch" gap="sm" wrap="nowrap" className="responsive-control-row">
+          <PasswordInput
+            aria-label="LuaTools Token"
+            visibilityToggleButtonProps={{ "aria-label": t(locale, "settings.toggleTokenVisibility") }}
+            value={luaToolsInput}
+            onChange={(event) => onLuaToolsInputChange(event.currentTarget.value)}
+            placeholder={t(locale, "settings.luaToolsPlaceholder")}
+            description={state?.luatoolsAuth && !state.luatoolsAuth.hasRefreshToken ? t(locale, "settings.luaToolsAccessOnly") : undefined}
+            autoComplete="off"
+            className="grow-control"
+          />
+          <ActionIcon
+            color="steam" variant="light"
+            onClick={onRefreshLuaToolsQuota}
+            disabled={!state?.luatoolsAuth}
+            aria-label={t(locale, "settings.refreshQuota")}
+            title={t(locale, "settings.refreshQuota")}
+          >
+            <RefreshCcw size={17} />
+          </ActionIcon>
+          <Button color="steam" variant="filled" c="#06121e" onClick={onSaveLuaToolsCredentials}>
             {t(locale, "common.save")}
           </Button>
         </Group>

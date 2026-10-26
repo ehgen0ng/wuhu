@@ -52,9 +52,10 @@ pub(crate) struct TicketItem {
     pub(crate) source_file_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppState {
+    pub(crate) luatools_auth: Option<crate::luatools_auth::AuthState>,
     pub(crate) settings: AppSettings,
     pub(crate) packages: Vec<PackageItem>,
     pub(crate) tickets: Vec<TicketItem>,
@@ -121,6 +122,7 @@ pub(crate) struct SteamSearchPlatforms {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManifestStatus {
     pub(crate) provider: String,
+    pub(crate) source: Option<String>,
     pub(crate) app_id: u32,
     pub(crate) game_name: Option<String>,
     pub(crate) status: Option<String>,

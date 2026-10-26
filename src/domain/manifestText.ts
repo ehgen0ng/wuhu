@@ -11,10 +11,13 @@ export function manifestStatusText(item: SteamSearchResult, locale: Locale) {
   if (status.updateInProgress) return null;
   if (!canAddManifest(item)) return null;
   const size = formatFileSize(status.fileSize);
+  const provider = status.provider === "luatools" ? `LuaTools${status.source ? ` · ${status.source}` : ""}`
+    : status.provider === "hubcap" ? "Hubcap" : "DepotBox";
+  const prefix = `${provider} · `;
   if (!status.fileModified) {
-    return t(locale, "manifest.availableSummary", { size: size ? ` · ${size}` : "" });
+    return prefix + t(locale, "manifest.availableSummary", { size: size ? ` · ${size}` : "" });
   }
-  return t(locale, "manifest.updatedSummary", { time: formatManifestTime(status.fileModified, locale), size: size ? ` · ${size}` : "" });
+  return prefix + t(locale, "manifest.updatedSummary", { time: formatManifestTime(status.fileModified, locale), size: size ? ` · ${size}` : "" });
 }
 
 export function manifestIssueText(item: SteamSearchResult, locale: Locale) {

@@ -45,6 +45,7 @@ pub(crate) async fn fetch_status(
     if !status_code.is_success() {
         return Ok(ManifestStatus {
             provider: "hubcap".to_string(),
+            source: None,
             app_id,
             game_name: None,
             status: Some(status_code.to_string()),
@@ -66,6 +67,7 @@ pub(crate) async fn fetch_status(
 
     Ok(ManifestStatus {
         provider: "hubcap".to_string(),
+        source: None,
         app_id: value_as_u32(&json, "app_id").unwrap_or(app_id),
         game_name: value_as_string(&json, "game_name")
             .or_else(|| value_as_string(&json, "app_name")),
