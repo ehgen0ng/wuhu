@@ -1,5 +1,6 @@
 use std::{ffi::c_void, mem, ptr, thread, time::Duration};
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExtractedTickets {
     pub(crate) app_ticket: Option<Vec<u8>>,
     pub(crate) e_ticket: Option<Vec<u8>>,
@@ -344,6 +345,9 @@ mod windows {
         fn drop(&mut self) {
             if !self.client.is_null() && self.pipe != 0 {
                 unsafe {
+                    if self.user != 0 {
+                        ((*(*self.client).vtable).release_user)(self.client, self.pipe, self.user);
+                    }
                     ((*(*self.client).vtable).b_release_steam_pipe)(self.client, self.pipe);
                 }
             }
@@ -359,9 +363,6 @@ mod windows {
         if !steam_client_path.exists() {
             return Err("Steam 根目录下没有找到 steamclient64.dll".to_string());
         }
-
-        std::env::set_var("SteamAppId", app_id.to_string());
-        std::env::set_var("SteamGameId", app_id.to_string());
 
         let library = load_steam_client(steam_root, &steam_client_path)?;
         let client = create_steam_client(&library)?;
@@ -426,7 +427,7 @@ mod windows {
             let user = ((*(*client).vtable).connect_to_global_user)(client, pipe);
             if user == 0 {
                 ((*(*client).vtable).b_release_steam_pipe)(client, pipe);
-                return Err("ConnectToGlobalUser 失败，请确认 Steam 已登录账号".to_string());
+                return Err("ConnectToGlobalUser 失败，请确认 Steam 正在运行、已登录，且当前账号拥有该游戏".to_string());
             }
 
             Ok(SteamSession { client, pipe, user })
@@ -730,6 +731,9 @@ mod macos {
         fn drop(&mut self) {
             if !self.client.is_null() && self.pipe != 0 {
                 unsafe {
+                    if self.user != 0 {
+                        ((*(*self.client).vtable).release_user)(self.client, self.pipe, self.user);
+                    }
                     ((*(*self.client).vtable).b_release_steam_pipe)(self.client, self.pipe);
                 }
             }
@@ -753,9 +757,6 @@ mod macos {
                     .to_string(),
             );
         }
-
-        std::env::set_var("SteamAppId", app_id.to_string());
-        std::env::set_var("SteamGameId", app_id.to_string());
 
         let library = load_steam_client(&steam_client_path)?;
         let client = create_steam_client(&library)?;
@@ -817,7 +818,7 @@ mod macos {
             if user == 0 {
                 ((*(*client).vtable).b_release_steam_pipe)(client, pipe);
                 return Err(
-                    "ConnectToGlobalUser 失败，请确认 Steam 正在运行并已登录账号".to_string(),
+                    "ConnectToGlobalUser 失败，请确认 Steam 正在运行、已登录，且当前账号拥有该游戏".to_string(),
                 );
             }
 

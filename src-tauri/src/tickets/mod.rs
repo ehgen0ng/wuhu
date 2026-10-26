@@ -15,10 +15,15 @@ use crate::{
     store::{load_store, portable_data_dir, save_store},
 };
 
+mod extractor;
 mod parser;
 mod steam_client;
 
 use parser::{build_lua_lines, build_tickets_txt, parse_tickets_txt, TicketData};
+
+pub(crate) use extractor::run_if_requested as run_extractor_if_requested;
+
+static EXTRACTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const TICKET_VALID_SECONDS: u64 = 30 * 60;
 
@@ -31,11 +36,17 @@ pub(crate) fn extract_ticket(
         return Err("AppID 无效".to_string());
     }
 
+    let _extraction = EXTRACTION_LOCK
+        .lock()
+        .map_err(|_| "票据提取状态异常，请重启 wuhu 后重试".to_string())?;
     let mut store = load_store()?;
     let steam_root =
         steam::configured_root(&store).ok_or_else(|| "请先在设置里配置 Steam 路径".to_string())?;
 
-    let extracted = steam_client::extract(&steam_root, app_id)?;
+    packages::reconcile_with_steam(&mut store)?;
+    let extracted = packages::with_suspended_packages_for_app_id(&store, app_id, || {
+        extractor::extract(&steam_root, app_id)
+    })?;
     if extracted.app_ticket.is_none() && extracted.e_ticket.is_none() {
         return Err(
             "没有提取到 AppTicket 或 ETicket，请确认 Steam 已运行且账号拥有该游戏".to_string(),

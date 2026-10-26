@@ -14,6 +14,11 @@ mod steam;
 mod store;
 mod tickets;
 
+/// Run the short-lived Steam ticket helper before starting the desktop UI.
+pub fn run_ticket_extractor_if_requested() -> Option<i32> {
+    tickets::run_extractor_if_requested()
+}
+
 use models::{AppRelease, AppState, HubcapQuota, InstallStatus, ManifestStatus, SteamSearchItem};
 use state::build_state;
 use store::{load_store, save_store, store_exists};
