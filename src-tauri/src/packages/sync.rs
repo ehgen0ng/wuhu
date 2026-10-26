@@ -15,13 +15,10 @@ pub(crate) fn reconcile_with_steam(store: &mut AppStore) -> Result<bool, String>
         return Ok(set_all_packages_enabled(store, false));
     };
 
-    let app_root = portable_data_dir()?;
-    let tickets = store.tickets.clone();
     let mut changed = false;
     for package in &mut store.packages {
         migrate_legacy_active_lua(&steam_root, &lua_root, package)?;
-        let actual_enabled =
-            package_matches_steam(&app_root, &steam_root, &lua_root, &tickets, package);
+        let actual_enabled = package_is_enabled(&lua_root, package);
         if package.enabled != actual_enabled {
             package.enabled = actual_enabled;
             changed = true;
@@ -98,42 +95,9 @@ fn set_all_packages_enabled(store: &mut AppStore, enabled: bool) -> bool {
     changed
 }
 
-fn package_matches_steam(
-    app_root: &Path,
-    steam_root: &Path,
-    lua_root: &Path,
-    tickets: &[TicketItem],
-    package: &PackageItem,
-) -> bool {
-    let package_dir = app_root.join("packages").join(&package.id);
-    let active_lua = lua_root.join(&package.lua_file_name);
-    let Ok(expected_lua) = render_package_lua(app_root, package, tickets) else {
-        return false;
-    };
-    if !file_matches_bytes(&expected_lua, &active_lua) {
-        return false;
-    }
-
-    for manifest_name in &package.manifest_files {
-        let local_manifest = package_dir.join("manifests").join(manifest_name);
-        let steam_manifest = steam_root.join("depotcache").join(manifest_name);
-        if !files_match(&local_manifest, &steam_manifest) {
-            return false;
-        }
-    }
-
-    true
-}
-
-fn file_matches_bytes(expected: &[u8], actual: &Path) -> bool {
-    let Ok(actual_meta) = fs::metadata(actual) else {
-        return false;
-    };
-    if actual_meta.len() != expected.len() as u64 {
-        return false;
-    }
-
-    matches!(fs::read(actual), Ok(actual_bytes) if actual_bytes == expected)
+// 开关表示对应 Lua 是否位于启用目录；缓存、票据或本地副本的差异不代表已禁用。
+fn package_is_enabled(lua_root: &Path, package: &PackageItem) -> bool {
+    lua_root.join(&package.lua_file_name).is_file()
 }
 
 fn files_match(expected: &Path, actual: &Path) -> bool {
@@ -293,10 +257,13 @@ fn remove_active_package(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{legacy_active_lua_path, migrate_legacy_active_lua};
+    use super::{
+        apply_package, legacy_active_lua_path, migrate_legacy_active_lua, package_is_enabled,
+        remove_active_lua,
+    };
     use crate::models::PackageItem;
 
     fn test_root(label: &str) -> PathBuf {
@@ -321,6 +288,91 @@ mod tests {
             manifest_file_size: None,
             image_url: None,
         }
+    }
+
+    // 在临时目录中执行真实启用流程，避免测试读写用户的 Steam 数据。
+    fn apply_test_package(root: &Path) -> (PathBuf, PathBuf, PackageItem) {
+        let steam_root = root.join("Steam");
+        let lua_root = root.join("OpenSteamTool").join("lua");
+        let mut package = test_package();
+        package.manifest_files = vec!["3265701_123.manifest".to_string()];
+        let package_dir = root.join("packages").join(&package.id);
+        std::fs::create_dir_all(package_dir.join("manifests")).unwrap();
+        std::fs::write(package_dir.join("source.lua"), b"addappid(3265700)\n").unwrap();
+        std::fs::write(
+            package_dir.join("manifests").join(&package.manifest_files[0]),
+            b"original manifest",
+        )
+        .unwrap();
+        apply_package(root, &steam_root, &lua_root, &package, &[]).unwrap();
+        (steam_root, lua_root, package)
+    }
+
+    #[test]
+    fn active_lua_stays_enabled_when_manifest_cache_changes_or_disappears() {
+        let root = test_root("manifest-cache-state");
+        let (steam_root, lua_root, mut package) = apply_test_package(&root);
+        // 模拟旧版本已把保存状态误判为关闭，读取应以启用目录为准。
+        package.enabled = false;
+        let cached_manifest = steam_root
+            .join("depotcache")
+            .join(&package.manifest_files[0]);
+
+        std::fs::write(&cached_manifest, b"updated manifest").unwrap();
+        let enabled_after_change = package_is_enabled(&lua_root, &package);
+        std::fs::remove_file(&cached_manifest).unwrap();
+        let enabled_after_removal = package_is_enabled(&lua_root, &package);
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            enabled_after_change,
+            "cache changes must not disable an active Lua"
+        );
+        assert!(
+            enabled_after_removal,
+            "cache removal must not disable an active Lua"
+        );
+    }
+
+    #[test]
+    fn active_lua_stays_enabled_when_its_text_or_local_copy_changes() {
+        let root = test_root("lua-copy-state");
+        let (_, lua_root, package) = apply_test_package(&root);
+        std::fs::write(
+            lua_root.join(&package.lua_file_name),
+            b"-- updated comment\r\naddappid(3265700)\r\n",
+        )
+        .unwrap();
+        let enabled_after_edit = package_is_enabled(&lua_root, &package);
+        std::fs::remove_dir_all(root.join("packages").join(&package.id)).unwrap();
+        let enabled_without_local_copy = package_is_enabled(&lua_root, &package);
+
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            enabled_after_edit,
+            "Lua text differences must not change the switch"
+        );
+        assert!(
+            enabled_without_local_copy,
+            "local copies must not determine the switch"
+        );
+    }
+
+    #[test]
+    fn manifest_cache_without_an_active_lua_file_stays_disabled() {
+        let root = test_root("disabled-lua-state");
+        let (steam_root, lua_root, package) = apply_test_package(&root);
+        assert!(package_is_enabled(&lua_root, &package));
+        remove_active_lua(&steam_root, &lua_root, &package).unwrap();
+        assert!(steam_root
+            .join("depotcache")
+            .join(&package.manifest_files[0])
+            .is_file());
+        assert!(!package_is_enabled(&lua_root, &package));
+
+        std::fs::create_dir_all(lua_root.join(&package.lua_file_name)).unwrap();
+        assert!(!package_is_enabled(&lua_root, &package));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
